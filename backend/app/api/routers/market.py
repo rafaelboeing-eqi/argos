@@ -11,6 +11,8 @@ from app.repositories.market_repository import (
     get_symbol_history,
 )
 from app.schemas.market import (
+    CommodityHistoryPoint,
+    CommodityHistoryResponse,
     CurvePoint,
     CurveResponse,
     HistoryPoint,
@@ -21,8 +23,14 @@ from app.schemas.market import (
     MarketOverviewResponse,
     MetricPoint,
     MetricsResponse,
+    RateCurvePoint,
+    RateCurveViewResponse,
+    TreasuryCurvePoint,
+    TreasuryCurveViewResponse,
 )
-from app.services.market_data.config import FUTURES_ASSETS, MACRO_SERIES
+from app.services.market_data.commodity_history import PERIOD_DAYS, build_commodity_history_view
+from app.services.market_data.config import COMMODITY_ASSETS, FUTURES_ASSETS, MACRO_SERIES, RATE_CURVE_ASSETS, TREASURY_ASSETS
+from app.services.market_data.curve_view import build_rate_curve_view, build_treasury_curve_view
 from app.services.market_data.overview import build_overview
 
 router = APIRouter(prefix="/api/market", tags=["market"])
@@ -52,6 +60,19 @@ def read_futures_curve(asset: str, db: Session = Depends(get_db)) -> CurveRespon
     ]
     reference_date = contracts[0].reference_date if contracts else None
     return CurveResponse(asset=asset, reference_date=reference_date, points=points)
+
+
+@router.get("/futures/{asset}/rate-curve", response_model=RateCurveViewResponse)
+def read_rate_curve_view(asset: str, db: Session = Depends(get_db)) -> RateCurveViewResponse:
+    """DI/DAP chart data: one contract per year, compared across today/7d/30d/90d."""
+    if asset not in RATE_CURVE_ASSETS:
+        raise HTTPException(status_code=404, detail=f"'{asset}' is not a rate curve asset")
+
+    view = build_rate_curve_view(db, asset)
+    curves = {
+        label: [RateCurvePoint(**point) for point in points] for label, points in view["curves"].items()
+    }
+    return RateCurveViewResponse(asset=asset, curves=curves)
 
 
 @router.get("/futures/{symbol}/history", response_model=HistoryResponse)
@@ -109,3 +130,42 @@ def read_metrics(
         for r in rows
     ]
     return MetricsResponse(metrics=points)
+
+
+@router.get("/treasury/{asset}/curve", response_model=TreasuryCurveViewResponse)
+def read_treasury_curve_view(
+    asset: str,
+    coupon_type: str | None = Query(default=None, description="Filter to one couponType (e.g. 'zero', 'semestral')"),
+    db: Session = Depends(get_db),
+) -> TreasuryCurveViewResponse:
+    """Tesouro Direto chart data: every currently-listed bond of `asset`, by
+    maturity, compared across today/7d/30d/90d. Bonds with a different
+    couponType are never silently mixed - `coupon_types` lists what's
+    available so the frontend can offer a modality selector."""
+    if asset not in TREASURY_ASSETS:
+        raise HTTPException(status_code=404, detail=f"Unknown treasury asset '{asset}'")
+
+    view = build_treasury_curve_view(db, asset, coupon_type=coupon_type)
+    curves = {
+        label: [TreasuryCurvePoint(**point) for point in points] for label, points in view["curves"].items()
+    }
+    return TreasuryCurveViewResponse(asset=asset, coupon_types=view["coupon_types"], curves=curves)
+
+
+@router.get("/commodities/{asset}/history", response_model=CommodityHistoryResponse)
+def read_commodity_history(
+    asset: str,
+    period: str = Query(default="90d", description="One of: 30d, 90d, 6m, 1a"),
+    db: Session = Depends(get_db),
+) -> CommodityHistoryResponse:
+    """Resolves the representative (front) contract for `asset` and returns its
+    price history for the requested window - if less history is stored than
+    requested, this returns whatever is available instead of erroring."""
+    if asset not in COMMODITY_ASSETS:
+        raise HTTPException(status_code=404, detail=f"Unknown commodity asset '{asset}'")
+    if period not in PERIOD_DAYS:
+        raise HTTPException(status_code=422, detail=f"Invalid period '{period}', expected one of {list(PERIOD_DAYS)}")
+
+    view = build_commodity_history_view(db, asset, period)
+    points = [CommodityHistoryPoint(**point) for point in view["points"]]
+    return CommodityHistoryResponse(asset=asset, symbol=view["symbol"], points=points)

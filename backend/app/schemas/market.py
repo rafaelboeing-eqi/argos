@@ -74,6 +74,7 @@ class CommodityCard(BaseModel):
     change_1d: float | None
     change_7d: float | None
     change_30d: float | None
+    change_90d: float | None
     reference_date: date | None
 
 
@@ -81,3 +82,42 @@ class MarketOverviewResponse(BaseModel):
     indicators: list[IndicatorCard]
     commodities: list[CommodityCard]
     data_as_of: date | None
+
+
+class RateCurvePoint(BaseModel):
+    symbol: str
+    expiration_date: date
+    reference_date: date
+    value: float
+
+
+class RateCurveViewResponse(BaseModel):
+    asset: str
+    curves: dict[str, list[RateCurvePoint]]
+
+
+class TreasuryCurvePoint(BaseModel):
+    symbol: str
+    expiration_date: date
+    reference_date: date
+    bond_type: str | None
+    coupon_type: str | None
+    buy_rate: float | None
+    sell_rate: float | None
+
+
+class TreasuryCurveViewResponse(BaseModel):
+    asset: str
+    coupon_types: list[str]
+    curves: dict[str, list[TreasuryCurvePoint]]
+
+
+class CommodityHistoryPoint(BaseModel):
+    reference_date: date
+    value: float
+
+
+class CommodityHistoryResponse(BaseModel):
+    asset: str
+    symbol: str | None
+    points: list[CommodityHistoryPoint]

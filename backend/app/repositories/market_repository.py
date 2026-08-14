@@ -74,11 +74,15 @@ def bulk_upsert_market_points(db: Session, points: list[dict[str, Any] | None]) 
     return counts
 
 
-def get_curve(db: Session, asset: str, reference_date: date | None = None) -> list[ArgosMarketHistory]:
-    """All contracts for `asset` at a given reference_date (defaults to the latest one available)."""
+def get_curve(
+    db: Session, asset: str, reference_date: date | None = None, category: str = CATEGORY_FUTURES_CURVE
+) -> list[ArgosMarketHistory]:
+    """All rows for `asset` at a given reference_date (defaults to the latest one
+    available). `category` defaults to futures curves; pass CATEGORY_TREASURY for
+    Tesouro Direto bonds - same "latest snapshot, one row per symbol/metric" shape."""
     if reference_date is None:
         latest_stmt = select(func.max(ArgosMarketHistory.reference_date)).where(
-            ArgosMarketHistory.category == CATEGORY_FUTURES_CURVE,
+            ArgosMarketHistory.category == category,
             ArgosMarketHistory.asset == asset,
         )
         reference_date = db.execute(latest_stmt).scalar_one_or_none()
@@ -88,7 +92,7 @@ def get_curve(db: Session, asset: str, reference_date: date | None = None) -> li
     stmt = (
         select(ArgosMarketHistory)
         .where(
-            ArgosMarketHistory.category == CATEGORY_FUTURES_CURVE,
+            ArgosMarketHistory.category == category,
             ArgosMarketHistory.asset == asset,
             ArgosMarketHistory.reference_date == reference_date,
         )
@@ -144,6 +148,17 @@ def get_latest_reference_date(db: Session, category: str, asset: str) -> date | 
         ArgosMarketHistory.asset == asset,
     )
     return db.execute(stmt).scalar_one_or_none()
+
+
+def has_history_for_symbol(db: Session, category: str, symbol: str) -> bool:
+    """Whether any row already exists for this (category, symbol) - used to decide
+    whether a specific bond/contract still needs its initial historical backfill,
+    independent of whether OTHER symbols in the same asset already have data."""
+    stmt = select(ArgosMarketHistory.id).where(
+        ArgosMarketHistory.category == category,
+        ArgosMarketHistory.symbol == symbol,
+    ).limit(1)
+    return db.execute(stmt).first() is not None
 
 
 def get_data_freshness(db: Session) -> date | None:

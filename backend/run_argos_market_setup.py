@@ -36,9 +36,17 @@ from sqlalchemy import text
 
 from app.core.config import get_settings
 from app.core.database import SessionLocal, engine
-from app.repositories.market_repository import get_latest_reference_date
-from app.services.market_data.config import CATEGORY_FUTURES_CURVE, CATEGORY_MACRO, FUTURES_ASSETS, MACRO_SERIES
-from app.services.market_data.market_collector import MarketCollectorService
+from app.repositories.market_repository import get_latest_reference_date, has_history_for_symbol
+from app.services.market_data.config import (
+    CATEGORY_FUTURES_CURVE,
+    CATEGORY_MACRO,
+    CATEGORY_TREASURY,
+    FUTURES_ASSETS,
+    MACRO_SERIES,
+    TREASURY_ASSETS,
+    TREASURY_HISTORY_BATCH_SIZE,
+)
+from app.services.market_data.market_collector import MarketCollectorService, chunked
 from app.services.market_data.market_metrics import MarketMetricsService
 
 EXPECTED_DATABASE = "features"
@@ -143,6 +151,35 @@ def backfill_macro_if_needed(db, collector: MarketCollectorService, slug: str, s
     return f"{slug}: backfill -> created={result['created']} updated={result['updated']} unchanged={result['unchanged']}"
 
 
+def backfill_treasury_if_needed(db, collector: MarketCollectorService, asset: str, start: date, end: date) -> str:
+    """Unlike futures/macro, this checks per-BOND history (not just per-asset):
+    Tesouro Direto gets new issuances fairly often, so a bond added after the
+    first backfill still needs its own history even though the asset overall
+    already has data."""
+    bonds = collector.discover_treasury_bonds(asset)
+    if not bonds:
+        return f"{asset}: nenhum título encontrado agora (brapi indisponível ou filtro sem resultado)"
+
+    new_symbols = [bond["symbol"] for bond in bonds if not has_history_for_symbol(db, CATEGORY_TREASURY, bond["symbol"])]
+    if not new_symbols:
+        return f"{asset}: já possui histórico para todos os {len(bonds)} títulos atuais, backfill pulado"
+
+    totals = {"created": 0, "updated": 0, "unchanged": 0, "skipped": 0}
+    failed_batches = []
+    for batch in chunked(new_symbols, TREASURY_HISTORY_BATCH_SIZE):
+        result = collector.collect_treasury_history(asset, batch, start_date=start, end_date=end)
+        if "error" in result:
+            failed_batches.append(batch)
+            continue
+        for key in totals:
+            totals[key] += result.get(key, 0)
+
+    summary = f"{asset}: backfill de {len(new_symbols)} título(s) novo(s) de {len(bonds)} -> {totals}"
+    if failed_batches:
+        summary += f" | lotes que falharam: {failed_batches}"
+    return summary
+
+
 def print_validation_report(conn) -> None:
     print("\n=== Validação final ===")
     market_count = conn.execute(text("SELECT count(*) FROM argos_market_history")).scalar()
@@ -188,12 +225,16 @@ def main() -> None:
             print(" -", backfill_futures_if_needed(db, collector, asset, start, end))
         for slug in MACRO_SERIES:
             print(" -", backfill_macro_if_needed(db, collector, slug, start, end))
+        for asset in TREASURY_ASSETS:
+            print(" -", backfill_treasury_if_needed(db, collector, asset, start, end))
 
         print("\n4) Coleta incremental (snapshot atual + gap-fill automático se necessário)")
         curve_results = collector.collect_all_futures_curves_incremental()
         macro_result = collector.collect_macro_incremental()
+        treasury_results = collector.collect_all_treasury_curves_incremental()
         print("   curvas:", curve_results)
         print("   macro:", macro_result)
+        print("   tesouro:", treasury_results)
 
         print("\n5) Calculando métricas (argos_metrics)")
         metrics_counts = MarketMetricsService(db).compute_all()

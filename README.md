@@ -2,7 +2,7 @@
 
 Sistema interno de monitoramento e inteligência sobre ativos distribuídos.
 
-Estado atual: infraestrutura inicial + módulo **Mercado** (curvas de futuros B3 e macro via brapi.dev). Regras de risco/concentração, motor de eventos e IA ainda não implementados.
+Estado atual: infraestrutura inicial + módulo **Mercado** (curvas de futuros B3, Tesouro Direto e macro via brapi.dev). Regras de risco/concentração, motor de eventos e IA ainda não implementados.
 
 ## Arquitetura
 
@@ -62,9 +62,12 @@ Endpoints disponíveis:
 - `GET /` → `{"system": "ARGOS", "status": "online"}`
 - `GET /health` → `{"api": "ok", "database": "connected"|"disconnected"}`
 - `GET /api/market/overview` → cards de Selic, IPCA, DI curto/médio/longo e commodities
-- `GET /api/market/futures/{asset}/curve` → curva atual de `DI1`, `DAP`, `BGI`, `CCM`, `ICF` ou `SJC`
+- `GET /api/market/futures/{asset}/curve` → curva atual completa de `DI1`, `DAP`, `BGI`, `CCM`, `ICF` ou `SJC`
+- `GET /api/market/futures/{asset}/rate-curve` → curva de DI/DAP reduzida a 1 contrato/ano (preferência janeiro), comparando hoje/7d/30d/90d
 - `GET /api/market/futures/{symbol}/history` → série histórica de um contrato específico (ex.: `DI1F27`)
 - `GET /api/market/macro?slugs=selic,ipca` → séries macro (padrão: as configuradas em `MACRO_SERIES`)
+- `GET /api/market/treasury/{asset}/curve?coupon_type=` → curva do Tesouro Direto (`treasury_ipca`/`treasury_prefixado`/`treasury_selic`) por vencimento, hoje/7d/30d/90d, com filtro opcional de modalidade (`zero`/`semestral`)
+- `GET /api/market/commodities/{asset}/history?period=30d|90d|6m|1a` → histórico do contrato representativo (front) de uma commodity
 - `GET /api/market/metrics?category=&asset=&symbol=` → indicadores calculados (variações, vértices da curva)
 
 Todos os endpoints `/api/market/*` leem apenas do PostgreSQL — o backend nunca chama a brapi durante uma requisição do frontend.

@@ -11,22 +11,11 @@ function ChangeBadge({ label, value }: { label: string; value: number | null }) 
   );
 }
 
-export function CommodityCard({
-  commodity,
-  onClick,
-}: {
-  commodity: CommodityCardData;
-  onClick: () => void;
-}) {
+export function CommodityCard({ commodity }: { commodity: CommodityCardData }) {
   const hasValue = commodity.value !== null;
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={!hasValue}
-      className="flex flex-col gap-3 rounded-2xl bg-white p-5 text-left shadow-sm ring-1 ring-argos-100 transition hover:ring-argos-400 disabled:cursor-not-allowed disabled:opacity-70"
-    >
+    <div className="flex flex-col gap-3 rounded-2xl bg-white p-5 text-left shadow-sm ring-1 ring-argos-100">
       <div className="flex items-baseline justify-between">
         <span className="text-sm font-medium text-argos-800">{commodity.label}</span>
         {commodity.symbol && <span className="text-xs text-argos-500">{commodity.symbol}</span>}
@@ -41,12 +30,13 @@ export function CommodityCard({
             <ChangeBadge label="1d" value={commodity.change_1d} />
             <ChangeBadge label="7d" value={commodity.change_7d} />
             <ChangeBadge label="30d" value={commodity.change_30d} />
+            <ChangeBadge label="90d" value={commodity.change_90d} />
           </div>
           <span className="text-xs text-argos-500">{formatDate(commodity.reference_date)}</span>
         </>
       ) : (
         <span className="text-sm text-argos-500">Sem dados ainda</span>
       )}
-    </button>
+    </div>
   );
 }

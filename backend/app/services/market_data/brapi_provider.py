@@ -93,6 +93,43 @@ class BrapiProvider:
         self._require_keys(payload, ["results"], context="macro/available")
         return payload
 
+    def get_treasury_list(self, indexer: str | None = None, limit: int | None = None) -> dict[str, Any]:
+        """Catalog of Tesouro Direto bonds - each entry already includes the current
+        snapshot (buyRate/sellRate/buyPrice/sellPrice/basePrice). Paginated by brapi
+        (default page size 20) - pass an explicit `limit` to avoid missing bonds past
+        page 1, the same trap already found on GET /api/v2/macro.
+        """
+        params: dict[str, Any] = {}
+        if indexer:
+            params["indexer"] = indexer
+        if limit is not None:
+            params["limit"] = limit
+        payload = self._get("/api/v2/treasury/list", params=params)
+        self._require_keys(payload, ["results"], context="treasury/list")
+        return payload
+
+    def get_treasury_indicators(self, symbols: list[str]) -> dict[str, Any]:
+        """Snapshot for up to ~20 explicit bond symbols."""
+        payload = self._get("/api/v2/treasury/indicators", params={"symbols": ",".join(symbols)})
+        self._require_keys(payload, ["results"], context=f"treasury/indicators symbols={symbols}")
+        return payload
+
+    def get_treasury_indicators_history(
+        self,
+        symbols: list[str],
+        start_date: str | None = None,
+        end_date: str | None = None,
+        sort_order: str = "asc",
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"symbols": ",".join(symbols), "sortOrder": sort_order}
+        if start_date:
+            params["startDate"] = start_date
+        if end_date:
+            params["endDate"] = end_date
+        payload = self._get("/api/v2/treasury/indicators/history", params=params)
+        self._require_keys(payload, ["results"], context=f"treasury/indicators/history symbols={symbols}")
+        return payload
+
     def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         if not self._token:
             raise BrapiNotConfiguredError("BRAPI_API_TOKEN is not configured")

@@ -27,12 +27,14 @@ def collect_daily_market_data(db: Session) -> dict:
 
     curve_results = collector.collect_all_futures_curves_incremental()
     macro_result = collector.collect_macro_incremental()
+    treasury_results = collector.collect_all_treasury_curves_incremental()
 
     metrics_counts = MarketMetricsService(db).compute_all()
 
     summary = {
         "curves": curve_results,
         "macro": macro_result,
+        "treasury": treasury_results,
         "metrics": metrics_counts,
     }
     logger.info("collect_daily_market_data finished: %s", summary)

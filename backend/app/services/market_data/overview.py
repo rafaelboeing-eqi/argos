@@ -14,6 +14,7 @@ from app.services.market_data.config import (
     COMMODITY_LABELS,
     MACRO_HIGHLIGHT_SERIES,
 )
+from app.services.market_data.curve_view import select_front_contract
 
 _MACRO_LABELS = {"selic": "Selic", "ipca": "IPCA"}
 
@@ -70,10 +71,11 @@ def _commodity_card(db: Session, asset: str) -> dict:
             "change_1d": None,
             "change_7d": None,
             "change_30d": None,
+            "change_90d": None,
             "reference_date": None,
         }
 
-    front = min(curve, key=lambda contract: contract.expiration_date)
+    front = select_front_contract(curve)
     metric_rows = [row for row in get_latest_metrics(db, category=CATEGORY_FUTURES_CURVE, asset=asset) if row.symbol == front.symbol]
 
     def _find(metric_name: str) -> float | None:
@@ -88,5 +90,6 @@ def _commodity_card(db: Session, asset: str) -> dict:
         "change_1d": _find("change_1d_pct"),
         "change_7d": _find("change_7d_pct"),
         "change_30d": _find("change_30d_pct"),
+        "change_90d": _find("change_90d_pct"),
         "reference_date": front.reference_date,
     }

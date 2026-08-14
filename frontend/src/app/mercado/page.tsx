@@ -5,16 +5,16 @@ import { useEffect, useState } from "react";
 import { fetchJson } from "@/lib/api";
 import type { MarketOverview } from "@/types/market";
 import { CommodityCard } from "@/components/market/CommodityCard";
-import { CommodityHistoryPanel } from "@/components/market/CommodityHistoryPanel";
+import { CommodityHistoryChart } from "@/components/market/CommodityHistoryChart";
 import { DataFreshnessBadge } from "@/components/market/DataFreshnessBadge";
 import { EmptyState } from "@/components/market/EmptyState";
 import { IndicatorCard } from "@/components/market/IndicatorCard";
 import { RateCurveChart } from "@/components/market/RateCurveChart";
+import { TreasuryCurveChart } from "@/components/market/TreasuryCurveChart";
 
 export default function MercadoPage() {
   const [overview, setOverview] = useState<MarketOverview | null>(null);
   const [loading, setLoading] = useState(true);
-  const [selectedCommodity, setSelectedCommodity] = useState<{ symbol: string; label: string } | null>(null);
 
   useEffect(() => {
     fetchJson<MarketOverview>("/api/market/overview")
@@ -54,6 +54,8 @@ export default function MercadoPage() {
 
       <RateCurveChart />
 
+      <TreasuryCurveChart />
+
       <section className="flex flex-col gap-4">
         <h2 className="text-base font-semibold text-argos-950">Commodities</h2>
         {loading ? (
@@ -64,27 +66,12 @@ export default function MercadoPage() {
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-            {overview?.commodities.map((commodity) => (
-              <CommodityCard
-                key={commodity.asset}
-                commodity={commodity}
-                onClick={() =>
-                  commodity.symbol && setSelectedCommodity({ symbol: commodity.symbol, label: commodity.label })
-                }
-              />
-            ))}
+            {overview?.commodities.map((commodity) => <CommodityCard key={commodity.asset} commodity={commodity} />)}
           </div>
         )}
       </section>
 
-      {selectedCommodity && (
-        <CommodityHistoryPanel
-          key={selectedCommodity.symbol}
-          symbol={selectedCommodity.symbol}
-          label={selectedCommodity.label}
-          onClose={() => setSelectedCommodity(null)}
-        />
-      )}
+      {!loading && <CommodityHistoryChart commodities={overview?.commodities ?? []} />}
     </div>
   );
 }

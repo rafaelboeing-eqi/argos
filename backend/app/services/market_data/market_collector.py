@@ -7,12 +7,24 @@ from sqlalchemy.orm import Session
 
 from app.repositories.market_repository import bulk_upsert_market_points, get_latest_reference_date
 from app.services.market_data.brapi_provider import BrapiProvider
-from app.services.market_data.config import CATEGORY_FUTURES_CURVE, CATEGORY_MACRO, FUTURES_ASSETS, MACRO_SERIES
+from app.services.market_data.config import (
+    CATEGORY_FUTURES_CURVE,
+    CATEGORY_MACRO,
+    CATEGORY_TREASURY,
+    FUTURES_ASSETS,
+    MACRO_SERIES,
+    TREASURY_ASSETS,
+    TREASURY_BOND_TYPE_PREFIXES,
+    TREASURY_HISTORY_BATCH_SIZE,
+    TREASURY_LIST_LIMIT,
+)
 from app.services.market_data.exceptions import BrapiError
 from app.services.market_data.normalizers import (
     normalize_futures_curve_contract,
     normalize_futures_history_point,
     normalize_macro_observation,
+    normalize_treasury_history_point,
+    normalize_treasury_point,
 )
 
 logger = logging.getLogger("argos.market_data.collector")
@@ -226,3 +238,110 @@ class MarketCollectorService:
             logger.error("Failed to discover curve symbols for %s: %s", asset, exc)
             return []
         return [c["symbol"] for c in payload.get("contracts", []) if c.get("symbol")]
+
+    # -- Tesouro Direto ---------------------------------------------------
+
+    def discover_treasury_bonds(self, asset: str) -> list[dict]:
+        """Every currently-listed bond whose bondType matches `asset` (see
+        TREASURY_BOND_TYPE_PREFIXES) - filtering by brapi's own `indexer` field
+        isn't enough, since e.g. indexer=ipca also covers Tesouro Educa+ and
+        Tesouro Renda+, which are out of scope. Each bond already carries its
+        own current snapshot (buyRate/sellRate/buyPrice/sellPrice/basePrice).
+        """
+        try:
+            payload = self.provider.get_treasury_list(limit=TREASURY_LIST_LIMIT)
+        except BrapiError as exc:
+            logger.error("Failed to discover treasury bonds for %s: %s", asset, exc)
+            return []
+        prefix = TREASURY_BOND_TYPE_PREFIXES[asset]
+        return [bond for bond in payload.get("results", []) if (bond.get("bondType") or "").startswith(prefix)]
+
+    def collect_treasury_curve(self, asset: str) -> dict:
+        """Fetch and persist the current snapshot for every bond of this treasury asset."""
+        bonds = self.discover_treasury_bonds(asset)
+        points = []
+        for bond in bonds:
+            points.extend(normalize_treasury_point(asset, bond))
+        counts = bulk_upsert_market_points(self.db, points)
+        self.db.commit()
+        return {"asset": asset, **counts}
+
+    def collect_all_treasury_curves(self) -> list[dict]:
+        return [self.collect_treasury_curve(asset) for asset in TREASURY_ASSETS]
+
+    def collect_treasury_curve_incremental(self, asset: str) -> dict:
+        """Daily-job entry point, mirrors collect_futures_curve_incremental(): always
+        grab today's snapshot (one cheap call), and if the last run was missed for
+        more than a day, backfill exactly the missing window per bond."""
+        previous_last_date = get_latest_reference_date(self.db, CATEGORY_TREASURY, asset)
+        bonds = self.discover_treasury_bonds(asset)
+        if not bonds:
+            return {"asset": asset, "mode": "snapshot", "error": "no bonds found on brapi right now"}
+
+        points = []
+        for bond in bonds:
+            points.extend(normalize_treasury_point(asset, bond))
+        counts = bulk_upsert_market_points(self.db, points)
+        self.db.commit()
+        result = {"asset": asset, "mode": "snapshot", **counts}
+
+        today = date.today()
+        if previous_last_date is not None and (today - previous_last_date).days > 1:
+            gap_start = previous_last_date + timedelta(days=1)
+            gap_end = today - timedelta(days=1)
+            symbols = [bond["symbol"] for bond in bonds if bond.get("symbol")]
+            result["gap_fill"] = self._backfill_treasury_gap(asset, symbols, gap_start, gap_end)
+
+        return result
+
+    def collect_all_treasury_curves_incremental(self) -> list[dict]:
+        return [self.collect_treasury_curve_incremental(asset) for asset in TREASURY_ASSETS]
+
+    def _backfill_treasury_gap(self, asset: str, symbols: list[str], start: date, end: date) -> dict:
+        totals = {"created": 0, "updated": 0, "unchanged": 0, "skipped": 0}
+        errors = []
+        for batch in chunked(symbols, TREASURY_HISTORY_BATCH_SIZE):
+            result = self.collect_treasury_history(asset, batch, start_date=start, end_date=end)
+            if "error" in result:
+                errors.append({"symbols": batch, "error": result["error"]})
+                continue
+            for key in totals:
+                totals[key] += result.get(key, 0)
+        summary = {"from": str(start), "to": str(end), **totals}
+        if errors:
+            summary["errors"] = errors
+        return summary
+
+    def collect_treasury_history(
+        self,
+        asset: str,
+        symbols: list[str],
+        start_date: str | date | None = None,
+        end_date: str | date | None = None,
+        sort_order: str = "asc",
+    ) -> dict:
+        """Backfill: fetch daily history for up to ~20 bond symbols in one call."""
+        try:
+            payload = self.provider.get_treasury_indicators_history(
+                symbols,
+                start_date=str(start_date) if start_date else None,
+                end_date=str(end_date) if end_date else None,
+                sort_order=sort_order,
+            )
+        except BrapiError as exc:
+            logger.error("Failed to collect treasury history for %s: %s", symbols, exc)
+            return {"symbols": symbols, "error": str(exc)}
+
+        points = []
+        for entry in payload.get("results", []):
+            bond_meta = {key: value for key, value in entry.items() if key != "history"}
+            for observation in entry.get("history", []):
+                points.extend(normalize_treasury_history_point(asset, bond_meta, observation))
+
+        counts = bulk_upsert_market_points(self.db, points)
+        self.db.commit()
+        return {"symbols": symbols, **counts}
+
+
+def chunked(items: list, size: int) -> list[list]:
+    return [items[i : i + size] for i in range(0, len(items), size)]
