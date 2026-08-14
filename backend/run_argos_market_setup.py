@@ -45,6 +45,7 @@ from app.services.market_data.config import (
     MACRO_SERIES,
     TREASURY_ASSETS,
     TREASURY_HISTORY_BATCH_SIZE,
+    TREASURY_LABELS,
 )
 from app.services.market_data.market_collector import MarketCollectorService, chunked
 from app.services.market_data.market_metrics import MarketMetricsService
@@ -155,7 +156,12 @@ def backfill_treasury_if_needed(db, collector: MarketCollectorService, asset: st
     """Unlike futures/macro, this checks per-BOND history (not just per-asset):
     Tesouro Direto gets new issuances fairly often, so a bond added after the
     first backfill still needs its own history even though the asset overall
-    already has data."""
+    already has data.
+
+    Prints [i/N] progress per bond as it goes - this step used to run silent for
+    minutes, which looked like it had hung.
+    """
+    label = TREASURY_LABELS.get(asset, asset)
     bonds = collector.discover_treasury_bonds(asset)
     if not bonds:
         return f"{asset}: nenhum título encontrado agora (brapi indisponível ou filtro sem resultado)"
@@ -164,17 +170,33 @@ def backfill_treasury_if_needed(db, collector: MarketCollectorService, asset: st
     if not new_symbols:
         return f"{asset}: já possui histórico para todos os {len(bonds)} títulos atuais, backfill pulado"
 
+    total = len(new_symbols)
+    print(f"   {label}: descobertos {total} título(s) novo(s) de {len(bonds)}")
+
     totals = {"created": 0, "updated": 0, "unchanged": 0, "skipped": 0}
     failed_batches = []
+    done = 0
+
+    def report_done(symbol: str, counts: dict) -> None:
+        nonlocal done
+        done += 1
+        print(f"   [{done}/{total}] {symbol} concluído - created={counts['created']} unchanged={counts['unchanged']}")
+
     for batch in chunked(new_symbols, TREASURY_HISTORY_BATCH_SIZE):
-        result = collector.collect_treasury_history(asset, batch, start_date=start, end_date=end)
+        for offset, symbol in enumerate(batch):
+            print(f"   [{done + offset + 1}/{total}] {symbol} processando")
+        result = collector.collect_treasury_history(
+            asset, batch, start_date=start, end_date=end, progress_callback=report_done
+        )
         if "error" in result:
             failed_batches.append(batch)
+            done += len(batch)
+            print(f"   lote falhou ({result['error']}): {batch}")
             continue
         for key in totals:
             totals[key] += result.get(key, 0)
 
-    summary = f"{asset}: backfill de {len(new_symbols)} título(s) novo(s) de {len(bonds)} -> {totals}"
+    summary = f"{asset}: backfill de {total} título(s) novo(s) de {len(bonds)} -> {totals}"
     if failed_batches:
         summary += f" | lotes que falharam: {failed_batches}"
     return summary

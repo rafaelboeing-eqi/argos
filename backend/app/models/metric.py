@@ -1,11 +1,8 @@
 from datetime import date, datetime
 
-from sqlalchemy import JSON, Date, DateTime, Numeric, String, UniqueConstraint, func
+from sqlalchemy import Date, DateTime, Index, Numeric, String, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
-
-# JSONB in production Postgres; plain JSON when tests run against SQLite.
-_JSON_TYPE = JSONB().with_variant(JSON(), "sqlite")
 
 from app.models.base import Base
 
@@ -19,12 +16,6 @@ class ArgosMetric(Base):
     """
 
     __tablename__ = "argos_metrics"
-    __table_args__ = (
-        UniqueConstraint(
-            "category", "asset", "symbol", "metric", "reference_date",
-            name="uq_argos_metrics_series",
-        ),
-    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     source: Mapped[str] = mapped_column(String, nullable=False)
@@ -34,8 +25,23 @@ class ArgosMetric(Base):
     metric: Mapped[str] = mapped_column(String, nullable=False)
     value: Mapped[float] = mapped_column(Numeric, nullable=False)
     reference_date: Mapped[date] = mapped_column(Date, nullable=False)
-    extra: Mapped[dict | None] = mapped_column("metadata", _JSON_TYPE, nullable=True)
+    extra: Mapped[dict | None] = mapped_column("metadata", JSONB(none_as_null=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        # symbol is nullable (asset-level metrics like curve vertices/slope
+        # have none) - same NULL-distinctness issue as
+        # argos_market_history.expiration_date, same COALESCE fix.
+        Index(
+            "uq_argos_metrics_series",
+            "category",
+            "asset",
+            text("COALESCE(symbol, '')"),
+            "metric",
+            "reference_date",
+            unique=True,
+        ),
     )

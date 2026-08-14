@@ -108,11 +108,29 @@ python -m app.scripts.backfill_market --futures-asset DI1 --start-date 2025-01-0
 
 ### Rodar os testes
 
+A suíte usa um Postgres real e descartável (não SQLite): `bulk_upsert_market_points`/
+`bulk_upsert_metrics` fazem upsert atômico via `INSERT ... ON CONFLICT`, um recurso
+específico do Postgres (junto com a coluna de sistema `xmax`, usada para diferenciar
+linha criada de linha atualizada) - não dá para simular isso em SQLite. **Nada disso
+toca no banco `features` real** - é um banco/usuário local só para os testes.
+
+Setup único (uma vez só, banco local qualquer, nada a ver com o banco corporativo):
+```bash
+sudo -u postgres psql -c "CREATE ROLE argos_test LOGIN PASSWORD 'argos_test';"
+sudo -u postgres psql -c "CREATE DATABASE argos_test OWNER argos_test;"
+```
+
+Depois, sempre:
 ```bash
 cd backend
 source .venv/bin/activate
 pytest -v
 ```
+
+Aponta por padrão para `postgresql+psycopg2://argos_test:argos_test@localhost:5432/argos_test`;
+para usar outro banco (ex.: um serviço Postgres de CI), exporte `ARGOS_TEST_DATABASE_URL`
+antes de rodar. Se o banco de teste não estiver acessível, os testes que dependem dele
+são pulados (skip) com uma mensagem explicando o motivo, em vez de dar erro confuso.
 
 ## Como iniciar o frontend
 

@@ -235,3 +235,49 @@ def test_collect_treasury_history_handles_bond_with_no_history_gracefully(db_ses
 
     assert result == {"symbols": ["tesouro-ipca-15082026"], "created": 0, "updated": 0, "unchanged": 0, "skipped": 0}
     assert db_session.query(ArgosMarketHistory).count() == 0
+
+
+def test_collect_treasury_history_reports_progress_once_per_bond(db_session):
+    """progress_callback fires per bond (not once for the whole batch), with that
+    bond's own created/unchanged counts - what run_argos_market_setup.py uses to
+    print [i/N] progress during the Tesouro backfill instead of staying silent."""
+    payload = {
+        "results": [
+            {
+                "symbol": "tesouro-ipca-15082026",
+                "bondType": "Tesouro IPCA+",
+                "indexer": "ipca",
+                "couponType": "zero",
+                "maturityDate": "2026-08-15",
+                "rateInfo": {},
+                "history": [
+                    {"baseDate": "2026-08-10", "buyRate": 6.1, "sellRate": 6.2, "buyPrice": 100.0, "sellPrice": 99.0, "basePrice": 99.0},
+                ],
+            },
+            {
+                "symbol": "tesouro-ipca-15082030",
+                "bondType": "Tesouro IPCA+",
+                "indexer": "ipca",
+                "couponType": "zero",
+                "maturityDate": "2030-08-15",
+                "rateInfo": {},
+                "history": [
+                    {"baseDate": "2026-08-10", "buyRate": 6.5, "sellRate": 6.6, "buyPrice": 90.0, "sellPrice": 89.0, "basePrice": 89.0},
+                ],
+            },
+        ]
+    }
+    provider = FakeProvider(treasury_history=payload)
+    collector = MarketCollectorService(db_session, provider=provider)
+
+    reported = []
+    collector.collect_treasury_history(
+        "treasury_ipca",
+        ["tesouro-ipca-15082026", "tesouro-ipca-15082030"],
+        start_date="2026-01-01",
+        end_date="2026-08-14",
+        progress_callback=lambda symbol, counts: reported.append((symbol, counts)),
+    )
+
+    assert [symbol for symbol, _ in reported] == ["tesouro-ipca-15082026", "tesouro-ipca-15082030"]
+    assert all(counts["created"] == 5 for _, counts in reported)  # 5 metrics per single-day observation

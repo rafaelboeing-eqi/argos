@@ -2,6 +2,7 @@
 
 import logging
 from datetime import date, timedelta
+from typing import Callable
 
 from sqlalchemy.orm import Session
 
@@ -319,8 +320,13 @@ class MarketCollectorService:
         start_date: str | date | None = None,
         end_date: str | date | None = None,
         sort_order: str = "asc",
+        progress_callback: Callable[[str, dict], None] | None = None,
     ) -> dict:
-        """Backfill: fetch daily history for up to ~20 bond symbols in one call."""
+        """Backfill: fetch daily history for up to ~20 bond symbols in one brapi call,
+        then upsert each bond's points in its own batch (still one INSERT ...
+        ON CONFLICT per bond, not one per point). If given, progress_callback(symbol,
+        counts) fires right after each bond is upserted, so callers can report
+        per-bond progress without waiting for the whole batch to finish."""
         try:
             payload = self.provider.get_treasury_indicators_history(
                 symbols,
@@ -332,15 +338,22 @@ class MarketCollectorService:
             logger.error("Failed to collect treasury history for %s: %s", symbols, exc)
             return {"symbols": symbols, "error": str(exc)}
 
-        points = []
+        totals = {"created": 0, "updated": 0, "unchanged": 0, "skipped": 0}
         for entry in payload.get("results", []):
             bond_meta = {key: value for key, value in entry.items() if key != "history"}
+            bond_symbol = bond_meta.get("symbol", "?")
+            points = []
             for observation in entry.get("history", []):
                 points.extend(normalize_treasury_history_point(asset, bond_meta, observation))
 
-        counts = bulk_upsert_market_points(self.db, points)
-        self.db.commit()
-        return {"symbols": symbols, **counts}
+            counts = bulk_upsert_market_points(self.db, points)
+            self.db.commit()
+            for key in totals:
+                totals[key] += counts[key]
+            if progress_callback:
+                progress_callback(bond_symbol, counts)
+
+        return {"symbols": symbols, **totals}
 
 
 def chunked(items: list, size: int) -> list[list]:

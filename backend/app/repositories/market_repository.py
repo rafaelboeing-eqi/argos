@@ -6,72 +6,134 @@ Nothing outside this module should build a query against these two tables.
 from datetime import date
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, literal_column, or_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.models.market_history import ArgosMarketHistory
 from app.models.metric import ArgosMetric
 from app.services.market_data.config import CATEGORY_FUTURES_CURVE
 
+# Sentinels matching the COALESCE(...) expressions baked into the NULL-safe unique
+# indexes (uq_argos_market_history_series / uq_argos_metrics_series) - must be the
+# exact same expression for ON CONFLICT to resolve to that index as its arbiter.
+_EXPIRATION_SENTINEL = date(1, 1, 1)
+_SYMBOL_SENTINEL = ""
+
+# Keeps each INSERT well under Postgres's ~65535 bind-parameter limit and the
+# statement reasonably sized, while still batching hundreds of rows per round trip
+# instead of one round trip per point.
+_UPSERT_BATCH_SIZE = 500
+
+
+def _dedupe_keep_last(points: list[dict[str, Any]], key_fn) -> list[dict[str, Any]]:
+    """A single INSERT ... ON CONFLICT errors (CardinalityViolation) if two rows in
+    the same statement share a conflict key - confirmed empirically. Collapse to the
+    last occurrence per key (same net effect as the old apply-in-order loop)."""
+    deduped: dict[tuple, dict[str, Any]] = {}
+    for point in points:
+        deduped[key_fn(point)] = point
+    return list(deduped.values())
+
+
+def _chunks(rows: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
+    return [rows[i : i + size] for i in range(0, len(rows), size)]
+
+
+def bulk_upsert_market_points(db: Session, points: list[dict[str, Any] | None]) -> dict[str, int]:
+    """Atomically upsert argos_market_history rows via INSERT ... ON CONFLICT,
+    targeting exactly the uq_argos_market_history_series index - i.e. (source,
+    category, asset, symbol, metric, reference_date, expiration_date with NULL
+    coalesced to a sentinel, matching the index's own COALESCE expression).
+
+    Race-free across concurrent processes/connections and free of any per-point
+    SELECT round trip - both confirmed empirically against a real Postgres before
+    this was written. `metadata` is only overwritten when the caller provides one
+    (None means "keep whatever is already stored"), matching prior semantics.
+    """
+    counts = {"created": 0, "updated": 0, "unchanged": 0, "skipped": 0}
+    rows: list[dict[str, Any]] = []
+    for point in points:
+        if not point:
+            counts["skipped"] += 1
+            continue
+        rows.append(point)
+
+    if not rows:
+        return counts
+
+    rows = _dedupe_keep_last(
+        rows,
+        key_fn=lambda p: (
+            p["source"],
+            p["category"],
+            p["asset"],
+            p["symbol"],
+            p["metric"],
+            p["reference_date"],
+            p.get("expiration_date"),
+        ),
+    )
+
+    for batch in _chunks(rows, _UPSERT_BATCH_SIZE):
+        # pg_insert() is given the raw Table (not the mapped class): with the mapped
+        # class, SQLAlchemy's ORM-bulk-insert path resolves a string "metadata" key
+        # through the mapper's entity namespace, where it collides with every
+        # declarative class's own `.metadata` (the MetaData registry) instead of our
+        # metadata column - confirmed empirically. The Table has no such attribute.
+        stmt = pg_insert(ArgosMarketHistory.__table__).values(
+            [
+                {
+                    "source": p["source"],
+                    "category": p["category"],
+                    "asset": p["asset"],
+                    "symbol": p["symbol"],
+                    "metric": p["metric"],
+                    "value": p["value"],
+                    "reference_date": p["reference_date"],
+                    "expiration_date": p.get("expiration_date"),
+                    "metadata": p.get("metadata"),
+                }
+                for p in batch
+            ]
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[
+                ArgosMarketHistory.source,
+                ArgosMarketHistory.category,
+                ArgosMarketHistory.asset,
+                ArgosMarketHistory.symbol,
+                ArgosMarketHistory.metric,
+                ArgosMarketHistory.reference_date,
+                func.coalesce(ArgosMarketHistory.expiration_date, _EXPIRATION_SENTINEL),
+            ],
+            set_={
+                "value": stmt.excluded.value,
+                "metadata": func.coalesce(stmt.excluded.metadata, ArgosMarketHistory.extra),
+            },
+            where=or_(
+                ArgosMarketHistory.value.is_distinct_from(stmt.excluded.value),
+                and_(
+                    stmt.excluded.metadata.isnot(None),
+                    ArgosMarketHistory.extra.is_distinct_from(stmt.excluded.metadata),
+                ),
+            ),
+        ).returning(ArgosMarketHistory.id, literal_column("(xmax = 0)").label("inserted"))
+
+        returned = db.execute(stmt).all()
+        created = sum(1 for row in returned if row.inserted)
+        counts["created"] += created
+        counts["updated"] += len(returned) - created
+        counts["unchanged"] += len(batch) - len(returned)
+
+    db.flush()
+    return counts
+
 
 def _expiration_filter(expiration_date: date | None):
     if expiration_date is None:
         return ArgosMarketHistory.expiration_date.is_(None)
     return ArgosMarketHistory.expiration_date == expiration_date
-
-
-def upsert_market_point(db: Session, point: dict[str, Any]) -> str:
-    """Insert a market_history row, or update it in place if the same
-    (source, category, asset, symbol, metric, reference_date, expiration_date)
-    already exists. Returns "created", "updated" or "unchanged"."""
-    stmt = select(ArgosMarketHistory).where(
-        ArgosMarketHistory.source == point["source"],
-        ArgosMarketHistory.category == point["category"],
-        ArgosMarketHistory.asset == point["asset"],
-        ArgosMarketHistory.symbol == point["symbol"],
-        ArgosMarketHistory.metric == point["metric"],
-        ArgosMarketHistory.reference_date == point["reference_date"],
-        _expiration_filter(point.get("expiration_date")),
-    )
-    existing = db.execute(stmt).scalar_one_or_none()
-
-    if existing is not None:
-        changed = False
-        if float(existing.value) != float(point["value"]):
-            existing.value = point["value"]
-            changed = True
-        metadata = point.get("metadata")
-        if metadata is not None and existing.extra != metadata:
-            existing.extra = metadata
-            changed = True
-        return "updated" if changed else "unchanged"
-
-    db.add(
-        ArgosMarketHistory(
-            source=point["source"],
-            category=point["category"],
-            asset=point["asset"],
-            symbol=point["symbol"],
-            metric=point["metric"],
-            value=point["value"],
-            reference_date=point["reference_date"],
-            expiration_date=point.get("expiration_date"),
-            extra=point.get("metadata"),
-        )
-    )
-    return "created"
-
-
-def bulk_upsert_market_points(db: Session, points: list[dict[str, Any] | None]) -> dict[str, int]:
-    counts = {"created": 0, "updated": 0, "unchanged": 0, "skipped": 0}
-    for point in points:
-        if not point:
-            counts["skipped"] += 1
-            continue
-        status = upsert_market_point(db, point)
-        counts[status] += 1
-    db.flush()
-    return counts
 
 
 def get_curve(
@@ -187,51 +249,78 @@ def get_value_on_or_before(
     return db.execute(stmt).scalar_one_or_none()
 
 
-def upsert_metric(db: Session, point: dict[str, Any]) -> str:
-    """Insert/update an argos_metrics row keyed by (category, asset, symbol, metric, reference_date)."""
-    stmt = select(ArgosMetric).where(
-        ArgosMetric.category == point["category"],
-        ArgosMetric.asset == point["asset"],
-        ArgosMetric.symbol == point.get("symbol"),
-        ArgosMetric.metric == point["metric"],
-        ArgosMetric.reference_date == point["reference_date"],
-    )
-    existing = db.execute(stmt).scalar_one_or_none()
-
-    if existing is not None:
-        changed = False
-        if float(existing.value) != float(point["value"]):
-            existing.value = point["value"]
-            changed = True
-        metadata = point.get("metadata")
-        if metadata is not None and existing.extra != metadata:
-            existing.extra = metadata
-            changed = True
-        return "updated" if changed else "unchanged"
-
-    db.add(
-        ArgosMetric(
-            source=point["source"],
-            category=point["category"],
-            asset=point["asset"],
-            symbol=point.get("symbol"),
-            metric=point["metric"],
-            value=point["value"],
-            reference_date=point["reference_date"],
-            extra=point.get("metadata"),
-        )
-    )
-    return "created"
-
-
 def bulk_upsert_metrics(db: Session, points: list[dict[str, Any] | None]) -> dict[str, int]:
+    """Same atomic INSERT ... ON CONFLICT strategy as bulk_upsert_market_points,
+    targeting uq_argos_metrics_series - (category, asset, symbol with NULL coalesced
+    to '', metric, reference_date)."""
     counts = {"created": 0, "updated": 0, "unchanged": 0, "skipped": 0}
+    rows: list[dict[str, Any]] = []
     for point in points:
         if not point:
             counts["skipped"] += 1
             continue
-        status = upsert_metric(db, point)
-        counts[status] += 1
+        rows.append(point)
+
+    if not rows:
+        return counts
+
+    rows = _dedupe_keep_last(
+        rows,
+        key_fn=lambda p: (
+            p["category"],
+            p["asset"],
+            p.get("symbol"),
+            p["metric"],
+            p["reference_date"],
+        ),
+    )
+
+    for batch in _chunks(rows, _UPSERT_BATCH_SIZE):
+        # See bulk_upsert_market_points: pg_insert() needs the raw Table, not the
+        # mapped class, to avoid the "metadata" entity-namespace collision.
+        stmt = pg_insert(ArgosMetric.__table__).values(
+            [
+                {
+                    "source": p["source"],
+                    "category": p["category"],
+                    "asset": p["asset"],
+                    "symbol": p.get("symbol"),
+                    "metric": p["metric"],
+                    "value": p["value"],
+                    "reference_date": p["reference_date"],
+                    "metadata": p.get("metadata"),
+                }
+                for p in batch
+            ]
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[
+                ArgosMetric.category,
+                ArgosMetric.asset,
+                func.coalesce(ArgosMetric.symbol, _SYMBOL_SENTINEL),
+                ArgosMetric.metric,
+                ArgosMetric.reference_date,
+            ],
+            set_={
+                "value": stmt.excluded.value,
+                "metadata": func.coalesce(stmt.excluded.metadata, ArgosMetric.extra),
+                "updated_at": func.now(),
+            },
+            where=or_(
+                ArgosMetric.value.is_distinct_from(stmt.excluded.value),
+                and_(
+                    stmt.excluded.metadata.isnot(None),
+                    ArgosMetric.extra.is_distinct_from(stmt.excluded.metadata),
+                ),
+            ),
+        ).returning(ArgosMetric.id, literal_column("(xmax = 0)").label("inserted"))
+
+        returned = db.execute(stmt).all()
+        created = sum(1 for row in returned if row.inserted)
+        counts["created"] += created
+        counts["updated"] += len(returned) - created
+        counts["unchanged"] += len(batch) - len(returned)
+
     db.flush()
     return counts
 

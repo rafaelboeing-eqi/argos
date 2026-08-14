@@ -1,10 +1,11 @@
 -- ============================================================================
 -- ARGOS - Módulo Mercado - migration manual (SQL puro, sem Alembic)
 --
--- Espelha as migrations Alembic 19dc5ecf6ad7 e e0ed4a2c7c0f, mais uma
--- correção (seção 0) descoberta ao validar contra a estrutura real. Executar
--- uma única vez, direto no SQL Editor do DBeaver, conectado ao banco
--- "features", schema "public".
+-- Espelha as migrations Alembic 19dc5ecf6ad7, e0ed4a2c7c0f, 4e6fd070e722 e
+-- 2340a66a9f58, mais a correção da seção 0, descobertas ao validar contra a
+-- estrutura real. Seguro rodar de novo mesmo que as seções 0-2 já tenham
+-- sido aplicadas antes - IF NOT EXISTS em tudo. Executar direto no SQL
+-- Editor do DBeaver, conectado ao banco "features", schema "public".
 --
 -- GARANTIAS:
 --   - só toca em public.argos_market_history e public.argos_metrics;
@@ -106,8 +107,6 @@ CREATE INDEX IF NOT EXISTS ix_argos_market_history_symbol
     ON public.argos_market_history (symbol);
 CREATE INDEX IF NOT EXISTS ix_argos_market_history_category
     ON public.argos_market_history (category);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_argos_market_history_series
-    ON public.argos_market_history (source, category, asset, symbol, metric, reference_date, expiration_date);
 
 -- argos_metrics
 CREATE INDEX IF NOT EXISTS ix_argos_metrics_reference_date
@@ -118,8 +117,38 @@ CREATE INDEX IF NOT EXISTS ix_argos_metrics_symbol
     ON public.argos_metrics (symbol);
 CREATE INDEX IF NOT EXISTS ix_argos_metrics_category
     ON public.argos_metrics (category);
+
+
+-- ----------------------------------------------------------------------------
+-- 4) Índices únicos NULL-safe (necessários para upsert atômico e concorrente)
+--
+--    expiration_date é nullable (séries macro/juros não têm vencimento) e o
+--    Postgres trata todo NULL como distinto num índice único simples - dois
+--    registros da MESMA série/data com expiration_date NULL NÃO violavam o
+--    índice antigo, permitindo duplicidade. O mesmo vale para "symbol" em
+--    argos_metrics (métricas no nível do ativo, ex. vértices de curva, não
+--    têm symbol). Confirmado empiricamente antes de escrever esta correção.
+--
+--    Por isso o índice único agora usa COALESCE para um valor-sentinela,
+--    fazendo NULL comparar como igual a si mesmo para fins de unicidade -
+--    e é exatamente esse o alvo (conflict target) do
+--    INSERT ... ON CONFLICT usado em market_repository.py.
+--
+--    Se as versões antigas (sem COALESCE) já existirem de uma aplicação
+--    anterior deste arquivo, o DROP + CREATE abaixo as substitui - só o
+--    índice muda, nenhum dado é tocado.
+-- ----------------------------------------------------------------------------
+
+DROP INDEX IF EXISTS uq_argos_market_history_series;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_argos_market_history_series
+    ON public.argos_market_history (
+        source, category, asset, symbol, metric, reference_date,
+        COALESCE(expiration_date, DATE '0001-01-01')
+    );
+
+DROP INDEX IF EXISTS uq_argos_metrics_series;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_argos_metrics_series
-    ON public.argos_metrics (category, asset, symbol, metric, reference_date);
+    ON public.argos_metrics (category, asset, COALESCE(symbol, ''), metric, reference_date);
 
 
 -- ============================================================================
