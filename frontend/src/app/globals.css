@@ -1,26 +1,43 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f2f5f4;
+  --foreground: #002118;
+
+  /* Argos brand scale (see project design spec). Font is Aeonik in the final
+     identity; the type files are not in this repo yet, so this falls back to
+     the system sans stack until src/assets/fonts/ is provided. */
+  --color-argos-50: #f2f5f4;
+  --color-argos-100: #dfeeeb;
+  --color-argos-200: #a8d5c6;
+  --color-argos-400: #00c796;
+  --color-argos-500: #009e76;
+  --color-argos-600: #005d47;
+  --color-argos-700: #004031;
+  --color-argos-800: #00382c;
+  --color-argos-900: #002e23;
+  --color-argos-950: #002118;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-argos-50: var(--color-argos-50);
+  --color-argos-100: var(--color-argos-100);
+  --color-argos-200: var(--color-argos-200);
+  --color-argos-400: var(--color-argos-400);
+  --color-argos-500: var(--color-argos-500);
+  --color-argos-600: var(--color-argos-600);
+  --color-argos-700: var(--color-argos-700);
+  --color-argos-800: var(--color-argos-800);
+  --color-argos-900: var(--color-argos-900);
+  --color-argos-950: var(--color-argos-950);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
 }

@@ -15,6 +15,14 @@ class Settings(BaseSettings):
 
     cors_origins: str = Field(default="http://localhost:3000")
 
+    brapi_api_token: str = Field(default="")
+    brapi_base_url: str = Field(default="https://brapi.dev")
+    brapi_timeout_seconds: float = Field(default=15.0)
+
+    @property
+    def brapi_configured(self) -> bool:
+        return bool(self.brapi_api_token)
+
     @property
     def database_configured(self) -> bool:
         return bool(self.database_host and self.database_name and self.database_user)
