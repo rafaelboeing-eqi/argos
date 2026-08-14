@@ -21,6 +21,7 @@ argos/
 │   │   ├── events/                # motor de estado dos eventos (futuro)
 │   │   ├── scripts/                # comandos manuais (backfill_market.py)
 │   │   └── api/routers/            # endpoints HTTP (system.py, market.py)
+│   ├── run_argos_market_setup.py  # setup único contra o Postgres real (ver abaixo)
 │   └── tests/
 ├── frontend/                     # Next.js + TypeScript + Tailwind - apenas apresentação
 │   └── src/
@@ -28,7 +29,8 @@ argos/
 │       ├── components/market/     # cards, gráficos (Recharts), estado vazio
 │       ├── lib/                    # fetch helper + formatação (sem regra de negócio)
 │       └── types/                  # tipos TS espelhando os schemas do backend
-└── docs/                          # documentação do projeto
+└── docs/
+    └── argos_market_migration.sql # migration em SQL puro, pronta pro DBeaver
 ```
 
 O frontend não contém regra de negócio: apenas consome a API do backend.
@@ -67,19 +69,30 @@ Endpoints disponíveis:
 
 Todos os endpoints `/api/market/*` leem apenas do PostgreSQL — o backend nunca chama a brapi durante uma requisição do frontend.
 
-### Aplicar a migration do módulo Mercado
+### Colocar o módulo Mercado para funcionar no banco real (`features`)
+
+Só dois passos, na máquina que tiver acesso à rede do Postgres real (este ambiente de desenvolvimento não alcança a RDS da EQI):
+
+**PASSO 1** — abrir o DBeaver, conectado no banco `features`/schema `public`, e executar `docs/argos_market_migration.sql`.
+
+**PASSO 2** — com `backend/.env` preenchido (host/porta/banco/usuário/senha reais + `BRAPI_API_TOKEN`):
+```bash
+cd backend
+python run_argos_market_setup.py
+```
+
+Esse script sozinho valida as pré-condições (banco/schema/tabelas/colunas — aborta sem alterar nada se algo não bater), faz o backfill inicial de ~180 dias só onde ainda não houver histórico, roda a coleta incremental e recalcula `argos_metrics`, terminando com um relatório (contagens, intervalo de datas, duplicidades, última atualização). **É idempotente**: rodar de novo não duplica nada, só preenche o que estiver faltando.
+
+Nunca imprime credenciais. Nunca faz `DROP`/`ALTER` fora de `argos_market_history`/`argos_metrics`, e a única alteração de coluna existente (não apenas `ADD COLUMN`) é anexar um identity/sequence à coluna `id` de cada tabela — necessário porque, na estrutura real, `id` não tinha nenhuma forma de auto-incremento; está isolado e comentado na seção 0 do SQL.
+
+<details>
+<summary>Alternativa via Alembic (bancos de desenvolvimento/CI criados do zero)</summary>
 
 ```bash
 cd backend
 source .venv/bin/activate
 alembic upgrade head
-```
 
-Isso adiciona colunas (todas `ADD COLUMN IF NOT EXISTS`, nunca `DROP`/`ALTER TYPE`) e índices em `argos_market_history` e `argos_metrics`. **Antes de rodar em produção**, confira o schema atual dessas duas tabelas (comandos SQL na seção de migrations pendentes, abaixo) — se alguma coluna legada for `NOT NULL` sem default, os inserts do coletor vão falhar até essa constraint ser relaxada.
-
-### Popular dados (coleta manual / backfill)
-
-```bash
 # snapshot do dia (curvas atuais + macro mais recente) - é isto que rodaria via cron:
 python -c "from app.core.database import SessionLocal; from app.services.market_data.scheduler import collect_daily_market_data; \
 db = SessionLocal(); collect_daily_market_data(db)"
@@ -90,6 +103,7 @@ python -m app.scripts.backfill_market --futures-asset DI1 --start-date 2025-01-0
 ```
 
 `collect_daily_market_data()` não tem cron/scheduler embutido de propósito — é só a função de entrada para ser chamada pela infraestrutura de agendamento da empresa.
+</details>
 
 ### Rodar os testes
 

@@ -17,6 +17,11 @@ from app.services.market_data.normalizers import (
 
 logger = logging.getLogger("argos.market_data.collector")
 
+# brapi's GET /api/v2/macro defaults to limit=20 when the param is omitted,
+# which silently truncates any backfill spanning more than ~20 observations.
+# Always pass an explicit, generous limit so a date range is never cut short.
+DEFAULT_MACRO_HISTORY_LIMIT = 5000
+
 
 class MarketCollectorService:
     def __init__(self, db: Session, provider: BrapiProvider | None = None):
@@ -193,7 +198,7 @@ class MarketCollectorService:
                 start_date=str(start_date) if start_date else None,
                 end_date=str(end_date) if end_date else None,
                 sort_order=sort_order,
-                limit=limit,
+                limit=limit if limit is not None else DEFAULT_MACRO_HISTORY_LIMIT,
             )
         except BrapiError as exc:
             logger.error("Failed to collect macro history: %s", exc)
