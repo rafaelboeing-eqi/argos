@@ -1,13 +1,13 @@
 """Fetches market data from brapi, normalizes it, and persists it to argos_market_history."""
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy.orm import Session
 
-from app.repositories.market_repository import bulk_upsert_market_points
+from app.repositories.market_repository import bulk_upsert_market_points, get_latest_reference_date
 from app.services.market_data.brapi_provider import BrapiProvider
-from app.services.market_data.config import FUTURES_ASSETS, MACRO_SERIES
+from app.services.market_data.config import CATEGORY_FUTURES_CURVE, CATEGORY_MACRO, FUTURES_ASSETS, MACRO_SERIES
 from app.services.market_data.exceptions import BrapiError
 from app.services.market_data.normalizers import (
     normalize_futures_curve_contract,
@@ -39,6 +39,52 @@ class MarketCollectorService:
     def collect_all_futures_curves(self) -> list[dict]:
         return [self.collect_futures_curve(asset) for asset in FUTURES_ASSETS]
 
+    def collect_futures_curve_incremental(self, asset: str) -> dict:
+        """Daily-job entry point: always grab today's snapshot (one cheap call), and if the
+        last run was missed for more than a day, backfill exactly the missing window per
+        contract so the gap in argos_market_history gets filled instead of silently skipped.
+        """
+        previous_last_date = get_latest_reference_date(self.db, CATEGORY_FUTURES_CURVE, asset)
+
+        try:
+            payload = self.provider.get_futures_term_structure(asset)
+        except BrapiError as exc:
+            logger.error("Failed to collect futures curve for %s: %s", asset, exc)
+            return {"asset": asset, "mode": "snapshot", "error": str(exc)}
+
+        contracts = payload.get("contracts", [])
+        points = [normalize_futures_curve_contract(asset, contract) for contract in contracts]
+        counts = bulk_upsert_market_points(self.db, points)
+        self.db.commit()
+        result = {"asset": asset, "mode": "snapshot", **counts}
+
+        today = date.today()
+        if previous_last_date is not None and (today - previous_last_date).days > 1:
+            gap_start = previous_last_date + timedelta(days=1)
+            gap_end = today - timedelta(days=1)  # today itself was just covered by the snapshot above
+            symbols = [c["symbol"] for c in contracts if c.get("symbol")]
+            result["gap_fill"] = self._backfill_futures_gap(asset, symbols, gap_start, gap_end)
+
+        return result
+
+    def collect_all_futures_curves_incremental(self) -> list[dict]:
+        return [self.collect_futures_curve_incremental(asset) for asset in FUTURES_ASSETS]
+
+    def _backfill_futures_gap(self, asset: str, symbols: list[str], start: date, end: date) -> dict:
+        totals = {"created": 0, "updated": 0, "unchanged": 0, "skipped": 0}
+        errors = []
+        for symbol in symbols:
+            result = self.collect_futures_history(asset, symbol, start_date=start, end_date=end)
+            if "error" in result:
+                errors.append({"symbol": symbol, "error": result["error"]})
+                continue
+            for key in totals:
+                totals[key] += result.get(key, 0)
+        summary = {"from": str(start), "to": str(end), **totals}
+        if errors:
+            summary["errors"] = errors
+        return summary
+
     def collect_macro_latest(self, symbols: list[str] | None = None) -> dict:
         """Fetch and persist the latest observation for each configured macro series.
 
@@ -63,6 +109,44 @@ class MarketCollectorService:
         counts = bulk_upsert_market_points(self.db, points)
         self.db.commit()
         return {"series": series, **counts}
+
+    def collect_macro_incremental(self, symbols: list[str] | None = None) -> dict:
+        """Daily-job entry point: always grab the latest published value for each series
+        (one cheap call), and for any slug whose last stored day is more than a day old,
+        backfill exactly the missing window instead of silently losing those observations.
+        """
+        series = symbols or MACRO_SERIES
+        # Snapshot each slug's last known date BEFORE collect_macro_latest() writes today's
+        # value - otherwise the gap check below would see today's just-inserted row and
+        # always conclude "no gap", even when days were actually missed.
+        previous_last_dates = {slug: get_latest_reference_date(self.db, CATEGORY_MACRO, slug) for slug in series}
+
+        result = self.collect_macro_latest(symbols=series)
+        result["mode"] = "latest"
+        if "error" in result:
+            return result
+
+        today = date.today()
+        gap_totals = {"created": 0, "updated": 0, "unchanged": 0, "skipped": 0}
+        gap_windows: dict[str, dict] = {}
+        for slug in series:
+            previous_last_date = previous_last_dates[slug]
+            if previous_last_date is None or (today - previous_last_date).days <= 1:
+                continue
+            gap_start = previous_last_date + timedelta(days=1)
+            gap_end = today - timedelta(days=1)
+            hist_result = self.collect_macro_history(symbols=[slug], start_date=gap_start, end_date=gap_end)
+            if "error" in hist_result:
+                gap_windows[slug] = {"from": str(gap_start), "to": str(gap_end), "error": hist_result["error"]}
+                continue
+            for key in gap_totals:
+                gap_totals[key] += hist_result.get(key, 0)
+            gap_windows[slug] = {"from": str(gap_start), "to": str(gap_end)}
+
+        if gap_windows:
+            result["gap_fill"] = {"series": gap_windows, **gap_totals}
+
+        return result
 
     def collect_futures_history(
         self,

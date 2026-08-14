@@ -18,13 +18,15 @@ logger = logging.getLogger("argos.market_data.scheduler")
 def collect_daily_market_data(db: Session) -> dict:
     """Fetch today's futures curves + latest macro observations, then recompute metrics.
 
-    Safe to call at most once a day: it only asks brapi for the *current* snapshot
-    (term-structure / macro latest), never full history.
+    Meant to run once a day. The common case is one cheap "current snapshot" call per
+    series; if this job didn't run for a while (outage, holiday, ...) it self-heals by
+    backfilling exactly the missing window per series instead of leaving a silent gap
+    in argos_market_history - see MarketCollectorService.collect_*_incremental().
     """
     collector = MarketCollectorService(db)
 
-    curve_results = collector.collect_all_futures_curves()
-    macro_result = collector.collect_macro_latest()
+    curve_results = collector.collect_all_futures_curves_incremental()
+    macro_result = collector.collect_macro_incremental()
 
     metrics_counts = MarketMetricsService(db).compute_all()
 

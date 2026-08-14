@@ -24,6 +24,17 @@ def test_overview_returns_elegant_empty_state_when_no_data_yet(client):
     assert all(indicator["value"] is None for indicator in body["indicators"])
     assert len(body["commodities"]) == 4  # Boi, Milho, Café, Soja
     assert all(commodity["value"] is None for commodity in body["commodities"])
+    assert body["data_as_of"] is None
+
+
+def test_overview_reports_data_as_of_the_newest_stored_point(client, db_session):
+    bulk_upsert_market_points(db_session, [DI1_POINT])
+    db_session.commit()
+
+    response = client.get("/api/market/overview")
+
+    assert response.status_code == 200
+    assert response.json()["data_as_of"] == str(DI1_POINT["reference_date"])
 
 
 def test_futures_curve_returns_404_for_unknown_asset(client):

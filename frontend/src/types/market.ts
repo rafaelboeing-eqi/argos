@@ -20,6 +20,7 @@ export type CommodityCard = {
 export type MarketOverview = {
   indicators: IndicatorCard[];
   commodities: CommodityCard[];
+  data_as_of: string | null;
 };
 
 export type CurvePoint = {

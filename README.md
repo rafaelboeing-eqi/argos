@@ -34,6 +34,17 @@ argos/
 O frontend não contém regra de negócio: apenas consome a API do backend.
 O banco PostgreSQL existente é tratado como **somente leitura** para as tabelas legadas — o Argos nunca faz `DROP`/`DELETE`/`UPDATE`/`ALTER` nelas. Tabelas novas (ou colunas adicionadas de forma aditiva) usam o prefixo `argos_` e só elas são versionadas pelo Alembic.
 
+### Regra central: a brapi é fonte de ingestão, não de consulta
+
+```
+brapi (fonte externa) → coleta/normalização → PostgreSQL → métricas/regras → API interna → frontend
+```
+
+- A brapi **só** é chamada por `MarketCollectorService`, pelo script de backfill e por `collect_daily_market_data()` — nunca pelos endpoints `GET /api/market/*` nem pelo frontend.
+- Toda consulta do usuário (página Mercado, gráficos, métricas) lê exclusivamente `argos_market_history`/`argos_metrics` no Postgres.
+- Se a brapi cair, a página Mercado continua funcionando normalmente com os últimos dados persistidos — o card "Dados atualizados até `<data>`" (endpoint `overview`) mostra a data mais recente realmente disponível no banco, para deixar isso transparente ao usuário.
+- A coleta diária é **incremental e autocurativa**: ela sempre busca o snapshot atual (1 chamada barata) e, se detectar que o último dado salvo está a mais de 1 dia de distância (job que não rodou por alguns dias, feriado, instabilidade), busca automaticamente só a janela que falta via `futures/historical`/`macro` — nunca refaz o histórico completo. Ver `MarketCollectorService.collect_futures_curve_incremental()` / `collect_macro_incremental()`.
+
 ## Como iniciar o backend
 
 ```bash

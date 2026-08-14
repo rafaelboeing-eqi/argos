@@ -80,3 +80,4 @@ class CommodityCard(BaseModel):
 class MarketOverviewResponse(BaseModel):
     indicators: list[IndicatorCard]
     commodities: list[CommodityCard]
+    data_as_of: date | None

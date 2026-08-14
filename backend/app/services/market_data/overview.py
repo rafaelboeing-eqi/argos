@@ -6,7 +6,7 @@ argos_market_history (to know which contract is the "front" one per commodity).
 
 from sqlalchemy.orm import Session
 
-from app.repositories.market_repository import get_curve, get_latest_metrics
+from app.repositories.market_repository import get_curve, get_data_freshness, get_latest_metrics
 from app.services.market_data.config import (
     CATEGORY_FUTURES_CURVE,
     CATEGORY_MACRO,
@@ -28,7 +28,10 @@ def build_overview(db: Session) -> dict:
     indicators = [_macro_indicator_card(db, slug) for slug in MACRO_HIGHLIGHT_SERIES]
     indicators += [_di_vertex_card(db, key, metric_name, label) for key, metric_name, label in _DI_VERTICES]
     commodities = [_commodity_card(db, asset) for asset in COMMODITY_ASSETS]
-    return {"indicators": indicators, "commodities": commodities}
+    # Newest reference_date Argos actually has, independent of brapi being reachable
+    # right now - this is what lets the Mercado page stay honest during an outage.
+    data_as_of = get_data_freshness(db)
+    return {"indicators": indicators, "commodities": commodities, "data_as_of": data_as_of}
 
 
 def _macro_indicator_card(db: Session, slug: str) -> dict:

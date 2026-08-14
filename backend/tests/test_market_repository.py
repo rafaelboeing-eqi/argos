@@ -1,7 +1,11 @@
 from datetime import date
 
 from app.models.market_history import ArgosMarketHistory
-from app.repositories.market_repository import bulk_upsert_market_points
+from app.repositories.market_repository import (
+    bulk_upsert_market_points,
+    get_data_freshness,
+    get_latest_reference_date,
+)
 
 FUTURES_POINT = {
     "source": "brapi",
@@ -82,3 +86,26 @@ def test_bulk_upsert_skips_none_entries_from_the_normalizer():
 
     counts = upsert(_NeverUsedSession(), [None, None])
     assert counts == {"created": 0, "updated": 0, "unchanged": 0, "skipped": 2}
+
+
+def test_get_latest_reference_date_returns_none_when_nothing_stored(db_session):
+    assert get_latest_reference_date(db_session, "futures_curve", "DI1") is None
+
+
+def test_get_latest_reference_date_returns_the_newest_date_for_that_series(db_session):
+    older = {**FUTURES_POINT, "reference_date": date(2026, 8, 1)}
+    newer = {**FUTURES_POINT, "reference_date": date(2026, 8, 10)}
+    bulk_upsert_market_points(db_session, [older, newer])
+    db_session.commit()
+
+    assert get_latest_reference_date(db_session, "futures_curve", "DI1") == date(2026, 8, 10)
+    assert get_latest_reference_date(db_session, "futures_curve", "BGI") is None
+
+
+def test_get_data_freshness_reflects_the_newest_point_across_all_series(db_session):
+    assert get_data_freshness(db_session) is None
+
+    bulk_upsert_market_points(db_session, [FUTURES_POINT, MACRO_POINT])
+    db_session.commit()
+
+    assert get_data_freshness(db_session) == max(FUTURES_POINT["reference_date"], MACRO_POINT["reference_date"])

@@ -136,6 +136,23 @@ def get_macro_series(
     return list(db.execute(stmt).scalars().all())
 
 
+def get_latest_reference_date(db: Session, category: str, asset: str) -> date | None:
+    """Most recent reference_date already stored for this (category, asset) - used to
+    detect gaps since the last successful collection run."""
+    stmt = select(func.max(ArgosMarketHistory.reference_date)).where(
+        ArgosMarketHistory.category == category,
+        ArgosMarketHistory.asset == asset,
+    )
+    return db.execute(stmt).scalar_one_or_none()
+
+
+def get_data_freshness(db: Session) -> date | None:
+    """Most recent reference_date across every series - the honest answer to
+    'what is the newest data Argos actually has right now', independent of brapi
+    being reachable at this instant."""
+    return db.execute(select(func.max(ArgosMarketHistory.reference_date))).scalar_one_or_none()
+
+
 def get_value_on_or_before(
     db: Session, category: str, asset: str, symbol: str, metric: str, as_of: date
 ) -> ArgosMarketHistory | None:
