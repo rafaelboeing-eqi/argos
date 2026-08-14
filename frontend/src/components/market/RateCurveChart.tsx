@@ -1,12 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { fetchJson } from "@/lib/api";
-import { mergeCurveWindows } from "@/lib/curves";
-import { formatDate } from "@/lib/format";
-import { CURVE_WINDOW_LABELS, CURVE_WINDOWS, type CurveWindowLabel, type RateCurveViewResponse } from "@/types/market";
+import { buildCurveSeries } from "@/lib/curves";
+import { formatDate, formatYearsToMaturity } from "@/lib/format";
+import {
+  CURVE_WINDOW_LABELS,
+  CURVE_WINDOWS,
+  type CurveWindowLabel,
+  type RateCurvePoint,
+  type RateCurveViewResponse,
+} from "@/types/market";
 import { EmptyState } from "./EmptyState";
 
 const CURVE_ASSETS = [
@@ -22,6 +28,8 @@ const WINDOW_COLORS: Record<CurveWindowLabel, string> = {
   "30d": "#005D47",
   "90d": "#A8D5C6",
 };
+
+type SeriesPoint = RateCurvePoint & { x: number; y: number };
 
 export function RateCurveChart() {
   const [asset, setAsset] = useState<CurveAssetKey>("DI1");
@@ -84,20 +92,30 @@ function RateCurveChartBody({ asset }: { asset: CurveAssetKey }) {
     });
   };
 
+  const curves = curveView?.curves;
+  // Memoized so the array/object identities stay stable across re-renders (e.g.
+  // hover/tooltip state) - recomputing fresh objects on every render made Recharts
+  // treat the data as brand new each time, restarting the line-draw animation and
+  // making the curve flicker away mid-hover. Called unconditionally (before the
+  // loading early-return) to satisfy the rules of hooks.
+  const series = useMemo(
+    () =>
+      curves
+        ? buildCurveSeries(
+            curves,
+            (point) => point.time_to_maturity_years,
+            (point) => point.value
+          )
+        : null,
+    [curves]
+  );
+
   if (loading) {
     return <div className="h-72 animate-pulse rounded-xl bg-argos-50" />;
   }
+  const hasAnyPoint = series ? CURVE_WINDOWS.some((window) => series[window].length > 0) : false;
 
-  const curves = curveView?.curves;
-  const chartData = curves
-    ? mergeCurveWindows(
-        curves,
-        (point) => String(new Date(`${point.expiration_date}T00:00:00Z`).getUTCFullYear()),
-        (point) => point.value
-      )
-    : [];
-
-  if (chartData.length === 0) {
+  if (!series || !hasAnyPoint) {
     return (
       <EmptyState
         title="Ainda não há curva coletada"
@@ -109,11 +127,24 @@ function RateCurveChartBody({ asset }: { asset: CurveAssetKey }) {
   return (
     <div className="h-80">
       <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={chartData} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
+        <LineChart margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#DFEEEB" />
-          <XAxis dataKey="key" tick={{ fontSize: 12, fill: "#005D47" }} />
-          <YAxis tick={{ fontSize: 12, fill: "#005D47" }} tickFormatter={(v) => `${v}%`} width={56} />
-          <Tooltip content={<RateCurveTooltip curves={curves} />} />
+          <XAxis
+            type="number"
+            dataKey="x"
+            domain={["dataMin", "dataMax"]}
+            tickFormatter={formatYearsToMaturity}
+            tick={{ fontSize: 12, fill: "#005D47" }}
+            label={{ value: "Prazo até o vencimento", position: "insideBottom", offset: -4, fontSize: 11, fill: "#005D47" }}
+          />
+          <YAxis
+            dataKey="y"
+            tick={{ fontSize: 12, fill: "#005D47" }}
+            tickFormatter={(v) => `${v}%`}
+            width={56}
+            domain={["auto", "auto"]}
+          />
+          <Tooltip content={<RateCurveTooltip />} />
           <Legend
             onClick={(entry) => toggleWindow(entry.dataKey as CurveWindowLabel)}
             wrapperStyle={{ cursor: "pointer", fontSize: 12 }}
@@ -121,14 +152,15 @@ function RateCurveChartBody({ asset }: { asset: CurveAssetKey }) {
           {CURVE_WINDOWS.map((window) => (
             <Line
               key={window}
+              data={series[window]}
               type="monotone"
-              dataKey={window}
+              dataKey="y"
               name={CURVE_WINDOW_LABELS[window]}
               stroke={WINDOW_COLORS[window]}
               strokeWidth={2}
               dot={{ r: 3 }}
               hide={hiddenWindows.has(window)}
-              connectNulls
+              isAnimationActive={false}
             />
           ))}
         </LineChart>
@@ -140,32 +172,29 @@ function RateCurveChartBody({ asset }: { asset: CurveAssetKey }) {
 function RateCurveTooltip({
   active,
   payload,
-  label,
-  curves,
 }: {
   active?: boolean;
-  payload?: Array<{ dataKey: CurveWindowLabel; value: number; color: string }>;
-  label?: string;
-  curves?: RateCurveViewResponse["curves"];
+  payload?: Array<{ dataKey: string; value: number; color: string; name: string; payload: SeriesPoint }>;
 }) {
-  if (!active || !payload || !payload.length || !curves) return null;
+  if (!active || !payload || !payload.length) return null;
 
   return (
     <div className="rounded-lg border border-argos-100 bg-white p-3 text-xs shadow-md">
-      <p className="mb-1 font-medium text-argos-950">Vencimento {label}</p>
       {payload.map((entry) => {
-        const point = curves[entry.dataKey]?.find(
-          (p) => String(new Date(`${p.expiration_date}T00:00:00Z`).getUTCFullYear()) === label
-        );
+        const point = entry.payload;
         return (
-          <div key={entry.dataKey} className="flex items-center justify-between gap-4" style={{ color: entry.color }}>
-            <span>
-              {CURVE_WINDOW_LABELS[entry.dataKey]}
-              {point ? ` (${point.symbol})` : ""}
-            </span>
-            <span className="font-medium">
-              {entry.value.toFixed(3)}% {point ? `· ${formatDate(point.reference_date)}` : ""}
-            </span>
+          <div key={`${entry.name}-${point.symbol}`} className="mb-1 last:mb-0" style={{ color: entry.color }}>
+            <p className="font-medium">
+              {entry.name} · {point.symbol}
+            </p>
+            <p className="text-argos-600">
+              Vencimento {formatDate(point.expiration_date)} · prazo {point.time_to_maturity_years.toFixed(2)}a
+            </p>
+            <p className="text-argos-600">
+              Taxa: <span className="font-medium text-argos-950">{point.value.toFixed(3)}%</span>
+              {" · "}
+              {formatDate(point.reference_date)}
+            </p>
           </div>
         );
       })}

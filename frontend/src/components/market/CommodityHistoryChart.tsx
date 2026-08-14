@@ -16,6 +16,27 @@ import {
 } from "@/types/market";
 import { EmptyState } from "./EmptyState";
 
+const Y_DOMAIN_PADDING_RATIO = 0.04;
+
+/**
+ * A commodity's price rarely swings anywhere near zero, so a Y axis pinned at 0
+ * flattens the very oscillations the chart exists to show (e.g. BGI moving
+ * between 330-358 looks like a flat line against a 0-360 axis). Zoom to the
+ * window's own min/max with a small padding instead - never changes the
+ * underlying values, only how the same values are framed.
+ */
+function computeYDomain(values: number[]): [number, number] {
+  if (values.length === 0) return [0, 1];
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  if (min === max) {
+    const pad = Math.abs(min) * Y_DOMAIN_PADDING_RATIO || 1;
+    return [min - pad, max + pad];
+  }
+  const pad = (max - min) * Y_DOMAIN_PADDING_RATIO;
+  return [min - pad, max + pad];
+}
+
 export function CommodityHistoryChart({ commodities }: { commodities: CommodityCard[] }) {
   const [asset, setAsset] = useState<CommodityAsset>("BGI");
   const [period, setPeriod] = useState<CommodityHistoryPeriod>("90d");
@@ -115,15 +136,23 @@ function CommodityHistoryChartBody({ asset, period }: { asset: CommodityAsset; p
     );
   }
 
+  const yDomain = computeYDomain(chartData.map((point) => point.value));
+
   return (
     <div className="h-64">
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={chartData} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#DFEEEB" />
           <XAxis dataKey="date" tick={{ fontSize: 12, fill: "#005D47" }} />
-          <YAxis tick={{ fontSize: 12, fill: "#005D47" }} width={56} />
+          <YAxis
+            tick={{ fontSize: 12, fill: "#005D47" }}
+            tickFormatter={(v: number) => v.toFixed(1)}
+            width={64}
+            domain={yDomain}
+            allowDataOverflow
+          />
           <Tooltip />
-          <Line type="monotone" dataKey="value" stroke="#00C796" strokeWidth={2} dot={false} />
+          <Line type="monotone" dataKey="value" stroke="#00C796" strokeWidth={2} dot={false} isAnimationActive={false} />
         </LineChart>
       </ResponsiveContainer>
     </div>

@@ -25,6 +25,8 @@ from app.schemas.market import (
     MetricsResponse,
     RateCurvePoint,
     RateCurveViewResponse,
+    TreasuryBondHistoryPoint,
+    TreasuryBondHistoryResponse,
     TreasuryCurvePoint,
     TreasuryCurveViewResponse,
 )
@@ -32,6 +34,7 @@ from app.services.market_data.commodity_history import PERIOD_DAYS, build_commod
 from app.services.market_data.config import COMMODITY_ASSETS, FUTURES_ASSETS, MACRO_SERIES, RATE_CURVE_ASSETS, TREASURY_ASSETS
 from app.services.market_data.curve_view import build_rate_curve_view, build_treasury_curve_view
 from app.services.market_data.overview import build_overview
+from app.services.market_data.treasury_history import build_treasury_bond_history_view
 
 router = APIRouter(prefix="/api/market", tags=["market"])
 
@@ -150,6 +153,24 @@ def read_treasury_curve_view(
         label: [TreasuryCurvePoint(**point) for point in points] for label, points in view["curves"].items()
     }
     return TreasuryCurveViewResponse(asset=asset, coupon_types=view["coupon_types"], curves=curves)
+
+
+@router.get("/treasury/{symbol}/history", response_model=TreasuryBondHistoryResponse)
+def read_treasury_bond_history(
+    symbol: str,
+    period: str = Query(default="90d", description="One of: 30d, 90d, 6m, 1a"),
+    db: Session = Depends(get_db),
+) -> TreasuryBondHistoryResponse:
+    """Rate evolution over time for one specific Tesouro Direto bond - if less
+    history is stored than requested, returns whatever is available instead of
+    erroring. An unknown/not-yet-collected symbol returns an empty view (200,
+    not 404) - same "no data yet" convention as the commodity history endpoint."""
+    if period not in PERIOD_DAYS:
+        raise HTTPException(status_code=422, detail=f"Invalid period '{period}', expected one of {list(PERIOD_DAYS)}")
+
+    view = build_treasury_bond_history_view(db, symbol, period)
+    points = [TreasuryBondHistoryPoint(**point) for point in view["points"]]
+    return TreasuryBondHistoryResponse(**{**view, "points": points})
 
 
 @router.get("/commodities/{asset}/history", response_model=CommodityHistoryResponse)

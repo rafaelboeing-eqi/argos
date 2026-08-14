@@ -17,6 +17,15 @@ from app.services.market_data.config import CATEGORY_FUTURES_CURVE, CATEGORY_TRE
 
 COMPARISON_WINDOWS = (("today", 0), ("7d", 7), ("30d", 30), ("90d", 90))
 
+DAYS_PER_YEAR = 365.25
+
+
+def compute_time_to_maturity_years(reference_date: date, expiration_date: date) -> float:
+    """Prazo até o vencimento em anos, a partir da data do snapshot (não de hoje) -
+    é isso que posiciona cada ponto no eixo X de uma curva de mercado real, em vez
+    de tratar o vencimento como categoria/ano equidistante."""
+    return (expiration_date - reference_date).days / DAYS_PER_YEAR
+
 
 def select_yearly_representative_contracts(rows: list) -> list:
     """One row per calendar year of `expiration_date`, preferring whichever
@@ -100,6 +109,9 @@ def build_rate_curve_view(db: Session, asset: str) -> dict:
                 "symbol": point["symbol"],
                 "expiration_date": point["expiration_date"],
                 "reference_date": point["reference_date"],
+                "time_to_maturity_years": compute_time_to_maturity_years(
+                    point["reference_date"], point["expiration_date"]
+                ),
                 "value": point[metric],
             }
             for point in points
@@ -146,6 +158,9 @@ def build_treasury_curve_view(db: Session, asset: str, coupon_type: str | None =
                     "symbol": point["symbol"],
                     "expiration_date": point["expiration_date"],
                     "reference_date": point["reference_date"],
+                    "time_to_maturity_years": compute_time_to_maturity_years(
+                        point["reference_date"], point["expiration_date"]
+                    ),
                     "bond_type": meta.get("bondType"),
                     "coupon_type": meta.get("couponType"),
                     "buy_rate": point.get("buy_rate"),

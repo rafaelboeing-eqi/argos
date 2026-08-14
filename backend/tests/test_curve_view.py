@@ -6,8 +6,22 @@ from app.services.market_data.curve_view import (
     build_multi_date_curve,
     build_rate_curve_view,
     build_treasury_curve_view,
+    compute_time_to_maturity_years,
     select_yearly_representative_contracts,
 )
+
+
+def test_compute_time_to_maturity_years_uses_the_snapshot_date_not_today():
+    """The whole point of this field: it's anchored to the SNAPSHOT's reference_date,
+    not to today - a 90d-ago snapshot of the same bond has a longer remaining prazo
+    than today's snapshot, since the expiration_date never moves."""
+    assert compute_time_to_maturity_years(date(2026, 1, 1), date(2027, 1, 1)) == 365 / 365.25
+
+
+def test_compute_time_to_maturity_years_matches_a_known_half_year_example():
+    # Jan 1 -> Jul 1 is 181 days in a non-leap year.
+    result = compute_time_to_maturity_years(date(2027, 1, 1), date(2027, 7, 1))
+    assert round(result, 2) == round(181 / 365.25, 2)
 
 
 @dataclass
@@ -125,6 +139,19 @@ def test_build_rate_curve_view_returns_empty_curves_when_no_data(db_session):
     assert view["curves"] == {"today": [], "7d": [], "30d": [], "90d": []}
 
 
+def test_build_rate_curve_view_reports_time_to_maturity_from_the_snapshot_date(db_session):
+    """X-axis value for a market-style curve: prazo real até o vencimento a partir
+    da data do snapshot, não uma categoria/ano equidistante."""
+    today = date.today()
+    expiration = today + timedelta(days=365)
+    bulk_upsert_market_points(db_session, [_di_point("DI1_NEXT", expiration, today, 13.5)])
+    db_session.commit()
+
+    view = build_rate_curve_view(db_session, "DI1")
+    point = view["curves"]["today"][0]
+    assert abs(point["time_to_maturity_years"] - 365 / 365.25) < 1e-6
+
+
 def _treasury_point(symbol, metric, value, expiration, reference, coupon_type):
     return {
         "source": "brapi",
@@ -175,3 +202,14 @@ def test_build_treasury_curve_view_includes_buy_and_sell_rate(db_session):
     point = view["curves"]["today"][0]
     assert point["buy_rate"] == 8.5
     assert point["sell_rate"] == 8.6
+
+
+def test_build_treasury_curve_view_reports_time_to_maturity_from_the_snapshot_date(db_session):
+    today = date.today()
+    expiration = today + timedelta(days=730)  # ~2 years out
+    bulk_upsert_market_points(db_session, [_treasury_point("bond", "buy_rate", 8.5, expiration, today, "zero")])
+    db_session.commit()
+
+    view = build_treasury_curve_view(db_session, "treasury_ipca")
+    point = view["curves"]["today"][0]
+    assert abs(point["time_to_maturity_years"] - 730 / 365.25) < 1e-6

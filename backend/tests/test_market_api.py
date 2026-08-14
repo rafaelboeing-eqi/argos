@@ -98,6 +98,7 @@ def test_rate_curve_returns_yearly_reduced_points(client, db_session):
     assert response.status_code == 200
     today_points = response.json()["curves"]["today"]
     assert {point["symbol"] for point in today_points} == {"DI1U26", "DI1U27"}
+    assert all(isinstance(point["time_to_maturity_years"], float) for point in today_points)
 
 
 def test_treasury_curve_returns_404_for_unknown_asset(client):
@@ -151,6 +152,57 @@ def test_treasury_curve_filters_by_coupon_type(client, db_session):
     filtered = client.get("/api/market/treasury/treasury_ipca/curve?coupon_type=zero")
     assert len(filtered.json()["curves"]["today"]) == 1
     assert filtered.json()["curves"]["today"][0]["symbol"] == "tesouro-ipca-zero"
+    assert isinstance(filtered.json()["curves"]["today"][0]["time_to_maturity_years"], float)
+
+
+def test_treasury_bond_history_returns_422_for_invalid_period(client):
+    response = client.get("/api/market/treasury/tesouro-ipca-zero/history?period=1w")
+    assert response.status_code == 422
+
+
+def test_treasury_bond_history_returns_empty_view_for_unknown_symbol(client):
+    response = client.get("/api/market/treasury/does-not-exist/history")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["symbol"] == "does-not-exist"
+    assert body["asset"] is None
+    assert body["points"] == []
+    assert body["variation_bps"] == {"1d": None, "7d": None, "30d": None, "90d": None}
+
+
+def test_treasury_bond_history_returns_persisted_series(client, db_session):
+    bulk_upsert_market_points(
+        db_session,
+        [
+            {
+                "source": "brapi",
+                "category": "treasury",
+                "asset": "treasury_ipca",
+                "symbol": "tesouro-ipca-zero",
+                "metric": "buy_rate",
+                "value": 8.5,
+                "reference_date": date(2026, 8, 13),
+                "expiration_date": date(2030, 1, 1),
+                "metadata": {
+                    "bondType": "Tesouro IPCA+",
+                    "couponType": "zero",
+                    "rateInfo": {"rateType": "realAnnualRateOverIpca"},
+                },
+            }
+        ],
+    )
+    db_session.commit()
+
+    response = client.get("/api/market/treasury/tesouro-ipca-zero/history?period=90d")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["asset"] == "treasury_ipca"
+    assert body["bond_type"] == "Tesouro IPCA+"
+    assert body["coupon_type"] == "zero"
+    assert body["rate_type"] == "realAnnualRateOverIpca"
+    assert body["current_buy_rate"] == 8.5
+    assert body["points"] == [{"reference_date": "2026-08-13", "buy_rate": 8.5, "sell_rate": None, "buy_price": None}]
 
 
 def test_commodity_history_returns_404_for_unknown_asset(client):

@@ -88,6 +88,7 @@ class RateCurvePoint(BaseModel):
     symbol: str
     expiration_date: date
     reference_date: date
+    time_to_maturity_years: float
     value: float
 
 
@@ -100,6 +101,7 @@ class TreasuryCurvePoint(BaseModel):
     symbol: str
     expiration_date: date
     reference_date: date
+    time_to_maturity_years: float
     bond_type: str | None
     coupon_type: str | None
     buy_rate: float | None
@@ -110,6 +112,26 @@ class TreasuryCurveViewResponse(BaseModel):
     asset: str
     coupon_types: list[str]
     curves: dict[str, list[TreasuryCurvePoint]]
+
+
+class TreasuryBondHistoryPoint(BaseModel):
+    reference_date: date
+    buy_rate: float | None
+    sell_rate: float | None
+    buy_price: float | None
+
+
+class TreasuryBondHistoryResponse(BaseModel):
+    symbol: str
+    asset: str | None
+    bond_type: str | None
+    coupon_type: str | None
+    expiration_date: date | None
+    rate_type: str | None
+    current_buy_rate: float | None
+    current_reference_date: date | None
+    variation_bps: dict[str, float | None]
+    points: list[TreasuryBondHistoryPoint]
 
 
 class CommodityHistoryPoint(BaseModel):

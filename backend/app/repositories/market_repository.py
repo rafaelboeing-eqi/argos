@@ -166,11 +166,12 @@ def get_curve(
 def get_symbol_history(
     db: Session,
     symbol: str,
+    category: str = CATEGORY_FUTURES_CURVE,
     start_date: date | None = None,
     end_date: date | None = None,
 ) -> list[ArgosMarketHistory]:
     stmt = select(ArgosMarketHistory).where(
-        ArgosMarketHistory.category == CATEGORY_FUTURES_CURVE,
+        ArgosMarketHistory.category == category,
         ArgosMarketHistory.symbol == symbol,
     )
     if start_date is not None:
