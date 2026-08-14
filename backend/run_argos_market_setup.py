@@ -1,28 +1,37 @@
 #!/usr/bin/env python3
 """One-shot setup for the Argos Mercado module against the real PostgreSQL.
 
-Run once from inside backend/, AFTER applying docs/argos_market_migration.sql
-in DBeaver:
+Run from inside backend/, with backend/.env pointing at the real database:
 
     cd backend
     python run_argos_market_setup.py
 
-What it does, in order: validates database/schema/table/column preconditions
-(read-only - aborts without changing anything if they don't match), backfills
-~180 days of history for any futures asset or macro series that has no data
-yet, runs the incremental daily collector, recomputes argos_metrics, then
-prints a validation report. Safe to run more than once: assets/series that
-already have data skip the full backfill, and every write goes through the
-same dedup-safe upsert used everywhere else in Argos, so re-running never
-duplicates rows - it only fills in whatever is still missing.
+What it does, in order: validates database/schema/table preconditions
+(read-only - aborts without changing anything if they don't match), applies
+pending Alembic migrations (schema changes are scoped to argos_market_history
+/ argos_metrics only - see backend/alembic/versions/), backfills ~180 days of
+history for any futures asset or macro series that has no data yet, runs the
+incremental daily collector, recomputes argos_metrics, then prints a
+validation report. Safe to run more than once: assets/series that already
+have data skip the full backfill, migrations that already ran are no-ops to
+Alembic, and every write goes through the same dedup-safe upsert used
+everywhere else in Argos - re-running never duplicates rows, it only fills in
+whatever is still missing.
 
-Never applies schema changes (no ALTER/CREATE/DROP here) and never prints
-BRAPI_API_TOKEN or database credentials.
+docs/argos_market_migration.sql documents the same schema changes in plain
+SQL, for anyone who prefers to review/run them by hand in DBeaver - keep it
+in sync if the Alembic migrations change.
+
+Never touches anything outside argos_market_history/argos_metrics, never
+drops a table, and never prints BRAPI_API_TOKEN or database credentials.
 """
 
 import sys
 from datetime import date, timedelta
+from pathlib import Path
 
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import text
 
 from app.core.config import get_settings
@@ -36,34 +45,9 @@ EXPECTED_DATABASE = "features"
 EXPECTED_SCHEMA = "public"
 REQUIRED_TABLES = ("argos_market_history", "argos_metrics")
 
-REQUIRED_MARKET_HISTORY_COLUMNS = {
-    "id",
-    "source",
-    "category",
-    "asset",
-    "symbol",
-    "metric",
-    "value",
-    "reference_date",
-    "expiration_date",
-    "metadata",
-    "created_at",
-}
-REQUIRED_METRICS_COLUMNS = {
-    "id",
-    "source",
-    "category",
-    "asset",
-    "symbol",
-    "metric",
-    "value",
-    "reference_date",
-    "metadata",
-    "created_at",
-    "updated_at",
-}
-
 BACKFILL_DAYS = 180
+
+BACKEND_DIR = Path(__file__).resolve().parent
 
 
 def abort(message: str) -> None:
@@ -71,15 +55,20 @@ def abort(message: str) -> None:
     sys.exit(1)
 
 
-def validate_preconditions() -> None:
-    """Read-only checks against the real database. Never alters anything."""
+def validate_connection_scope() -> None:
+    """Read-only checks against the real database. Never alters anything.
+
+    Confirms we're talking to the right database/schema and that the only
+    tables in play are argos_market_history/argos_metrics, per the project's
+    database safety policy (see CLAUDE.md).
+    """
     settings = get_settings()
     if engine is None:
         abort("DATABASE_* não configurado em backend/.env.")
     if not settings.brapi_configured:
         abort("BRAPI_API_TOKEN não configurado em backend/.env.")
 
-    print("1/2 Validando conexão, banco e schema...")
+    print("1) Validando conexão, banco e schema...")
     with engine.connect() as conn:
         current_db, current_schema = conn.execute(text("SELECT current_database(), current_schema()")).one()
         if current_db != EXPECTED_DATABASE:
@@ -99,40 +88,25 @@ def validate_preconditions() -> None:
         )
         missing_tables = set(REQUIRED_TABLES) - existing_tables
         if missing_tables:
-            abort(f"Tabela(s) ausente(s) em {EXPECTED_SCHEMA}: {sorted(missing_tables)}.")
+            abort(
+                f"Tabela(s) ausente(s) em {EXPECTED_SCHEMA}: {sorted(missing_tables)}. "
+                "Este script só cria/altera argos_market_history e argos_metrics - "
+                "elas precisam existir (mesmo que só com a coluna id)."
+            )
         print(f"   tabelas encontradas: {sorted(existing_tables)}")
 
-        print("2/2 Validando colunas (assumindo que docs/argos_market_migration.sql já rodou)...")
-        for table, required_columns in (
-            ("argos_market_history", REQUIRED_MARKET_HISTORY_COLUMNS),
-            ("argos_metrics", REQUIRED_METRICS_COLUMNS),
-        ):
-            rows = conn.execute(
-                text(
-                    "SELECT column_name, column_default, is_identity FROM information_schema.columns "
-                    "WHERE table_schema = :schema AND table_name = :table"
-                ),
-                {"schema": EXPECTED_SCHEMA, "table": table},
-            ).all()
-            columns = {row.column_name for row in rows}
+    print("Escopo OK - nada foi alterado ainda.\n")
 
-            missing_columns = required_columns - columns
-            if missing_columns:
-                abort(
-                    f"Coluna(s) ausente(s) em {table}: {sorted(missing_columns)}. "
-                    "Rode docs/argos_market_migration.sql no DBeaver antes de continuar."
-                )
 
-            id_row = next(row for row in rows if row.column_name == "id")
-            if not id_row.column_default and id_row.is_identity != "YES":
-                abort(
-                    f"A coluna 'id' de {table} não tem default/identity - todo INSERT vai falhar. "
-                    "Rode docs/argos_market_migration.sql no DBeaver (seção 0) antes de continuar."
-                )
-
-            print(f"   {table}: OK ({len(columns)} colunas, id com geração automática)")
-
-    print("Pré-condições OK - nada foi alterado no schema.\n")
+def apply_migrations() -> None:
+    """Runs `alembic upgrade head`. Alembic's env.py only ever maps
+    argos_market_history/argos_metrics (see app/models/base.py), so this can
+    never touch any other table."""
+    print("2) Aplicando migrations (alembic upgrade head)...")
+    config = Config(str(BACKEND_DIR / "alembic.ini"))
+    config.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    command.upgrade(config, "head")
+    print("   Migrations em dia.\n")
 
 
 def backfill_futures_if_needed(db, collector: MarketCollectorService, asset: str, start: date, end: date) -> str:
@@ -200,7 +174,8 @@ def print_validation_report(conn) -> None:
 
 
 def main() -> None:
-    validate_preconditions()
+    validate_connection_scope()
+    apply_migrations()
 
     start = date.today() - timedelta(days=BACKFILL_DAYS)
     end = date.today()

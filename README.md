@@ -71,22 +71,20 @@ Todos os endpoints `/api/market/*` leem apenas do PostgreSQL — o backend nunca
 
 ### Colocar o módulo Mercado para funcionar no banco real (`features`)
 
-Só dois passos, na máquina que tiver acesso à rede do Postgres real (este ambiente de desenvolvimento não alcança a RDS da EQI):
+Um passo só, na máquina que tiver acesso à rede do Postgres real (este ambiente de desenvolvimento não alcança a RDS da EQI — ver `CLAUDE.md` para a política completa de banco):
 
-**PASSO 1** — abrir o DBeaver, conectado no banco `features`/schema `public`, e executar `docs/argos_market_migration.sql`.
-
-**PASSO 2** — com `backend/.env` preenchido (host/porta/banco/usuário/senha reais + `BRAPI_API_TOKEN`):
+Com `backend/.env` preenchido (host/porta/banco/usuário/senha reais + `BRAPI_API_TOKEN`):
 ```bash
 cd backend
 python run_argos_market_setup.py
 ```
 
-Esse script sozinho valida as pré-condições (banco/schema/tabelas/colunas — aborta sem alterar nada se algo não bater), faz o backfill inicial de ~180 dias só onde ainda não houver histórico, roda a coleta incremental e recalcula `argos_metrics`, terminando com um relatório (contagens, intervalo de datas, duplicidades, última atualização). **É idempotente**: rodar de novo não duplica nada, só preenche o que estiver faltando.
+Esse script sozinho: valida banco/schema/tabelas (aborta sem alterar nada se algo não bater com `features`/`public`/`argos_*`), aplica as migrations pendentes (Alembic — só em `argos_market_history`/`argos_metrics`), faz o backfill inicial de ~180 dias só onde ainda não houver histórico, roda a coleta incremental e recalcula `argos_metrics`, terminando com um relatório (contagens, intervalo de datas, duplicidades, última atualização). **É idempotente**: rodar de novo não duplica nada, não reaplica migration já rodada, só preenche o que estiver faltando.
 
-Nunca imprime credenciais. Nunca faz `DROP`/`ALTER` fora de `argos_market_history`/`argos_metrics`, e a única alteração de coluna existente (não apenas `ADD COLUMN`) é anexar um identity/sequence à coluna `id` de cada tabela — necessário porque, na estrutura real, `id` não tinha nenhuma forma de auto-incremento; está isolado e comentado na seção 0 do SQL.
+Nunca imprime credenciais. `docs/argos_market_migration.sql` documenta o mesmo schema em SQL puro, para quem preferir revisar/rodar manualmente no DBeaver — mantenha os dois em sync se as migrations mudarem.
 
 <details>
-<summary>Alternativa via Alembic (bancos de desenvolvimento/CI criados do zero)</summary>
+<summary>Comandos individuais (equivalentes ao que o script acima já faz)</summary>
 
 ```bash
 cd backend
