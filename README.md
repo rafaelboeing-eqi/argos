@@ -158,8 +158,12 @@ Copie `backend/.env.example` para `backend/.env` e preencha:
 | `DATABASE_PASSWORD`  | Senha do usuário                                          |
 | `CORS_ORIGINS`       | Origem(ns) do frontend permitidas, separadas por vírgula (padrão `http://localhost:3000`) |
 | `BRAPI_API_TOKEN`    | Token da [brapi.dev](https://brapi.dev) — usado só no backend, nunca enviado ao frontend nem colocado em URL (vai sempre em `Authorization: Bearer`) |
+| `BRAPI_BASE_URL`     | Base URL da brapi.dev (padrão `https://brapi.dev`) — normalmente não precisa mudar |
+| `BRAPI_TIMEOUT_SECONDS` | Timeout das chamadas à brapi.dev, em segundos (padrão `15.0`) |
 
-O arquivo `.env` real nunca é commitado (está no `.gitignore`). Nenhuma credencial é exposta ao frontend, e a senha/connection string/token nunca são impressos em log.
+`ARGOS_TEST_DATABASE_URL` **não** é uma variável do `.env` de aplicação — é só para os testes (`backend/tests/conftest.py`), aponta pro banco local descartável descrito em "Rodar os testes" acima, nunca para o banco `features` real.
+
+O arquivo `.env` real nunca é commitado (está no `.gitignore`); só os arquivos `*.env.example`/`.env*.example` (sem valores reais) são versionados. Nenhuma credencial é exposta ao frontend, e a senha/connection string/token nunca são impressos em log.
 
 ## Configuração do `.env.local` (frontend)
 
@@ -168,3 +172,13 @@ Copie `frontend/.env.local.example` para `frontend/.env.local` e ajuste, se nece
 | Variável              | Descrição                          |
 |-----------------------|-------------------------------------|
 | `NEXT_PUBLIC_API_URL` | URL do backend (padrão `http://localhost:8000`) |
+
+## Portabilidade: PC corporativo (WSL/Linux) e Mac
+
+O repositório é o mesmo nas duas máquinas — nada de projeto paralelo. Diferenças de ambiente:
+
+- **Backend**: `psycopg2-binary` e as demais dependências do `requirements.txt` publicam wheels pré-compilados para Linux e macOS (Intel e Apple Silicon), então `pip install -r requirements.txt` dentro da venv funciona igual nas duas máquinas. Use sempre `python3` (o `python` do sistema pode não existir/apontar pra versão errada em ambas).
+- **Frontend**: o `npm install` resolve sozinho o binário nativo do Next.js/SWC certo pra cada SO/arquitetura via `package-lock.json` — não é preciso nenhum passo manual extra no Mac.
+- **Testes do backend**: dependem de um Postgres local descartável (não SQLite) — o passo de `CREATE ROLE`/`CREATE DATABASE` em "Rodar os testes" precisa ser feito uma vez em cada máquina (no Mac, tipicamente via `brew install postgresql` + `psql` local, em vez de `sudo -u postgres psql`).
+- **Banco real (`features`)**: só é alcançável de dentro da rede corporativa da EQI — funciona no PC corporativo (WSL) quando conectado a ela, e não deve funcionar de fora (Mac fora da VPN/rede, sandboxes na nuvem). Isso é esperado, não é um bug de portabilidade.
+- Sem paths, scripts ou dependências específicas de WSL/Linux identificados no código — o mesmo `.env`/`.env.local` (preenchidos localmente a partir dos `*.example`) funciona nas duas máquinas.
