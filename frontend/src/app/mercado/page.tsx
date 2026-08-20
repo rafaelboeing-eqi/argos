@@ -7,7 +7,7 @@ import type { MarketOverview } from "@/types/market";
 import { CommodityCard } from "@/components/market/CommodityCard";
 import { CommodityHistoryChart } from "@/components/market/CommodityHistoryChart";
 import { DataFreshnessBadge } from "@/components/market/DataFreshnessBadge";
-import { EmptyState } from "@/components/market/EmptyState";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { IndicatorCard } from "@/components/market/IndicatorCard";
 import { RateCurveChart } from "@/components/market/RateCurveChart";
 import { TreasuryCurveChart } from "@/components/market/TreasuryCurveChart";
@@ -26,14 +26,12 @@ export default function MercadoPage() {
   const hasAnyIndicator = overview?.indicators.some((indicator) => indicator.value !== null) ?? false;
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-6 py-10">
-      <header className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-        <div className="flex flex-col gap-1">
-          <h1 className="text-2xl font-semibold text-argos-950">Mercado</h1>
-          <p className="text-sm text-argos-600">Panorama de juros, macro e commodities monitorados pelo Argos.</p>
+    <div className="flex w-full flex-col gap-6 px-8 py-6">
+      {!loading && (
+        <div className="flex justify-end">
+          <DataFreshnessBadge dataAsOf={overview?.data_as_of ?? null} />
         </div>
-        {!loading && <DataFreshnessBadge dataAsOf={overview?.data_as_of ?? null} />}
-      </header>
+      )}
 
       <section className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
         {loading ? (

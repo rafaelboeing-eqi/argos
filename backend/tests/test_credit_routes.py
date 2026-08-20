@@ -108,6 +108,91 @@ def test_ingest_financial_period_without_triggering_analysis(credit_client):
     assert "nao disparada" in resp.json()["mensagem"]
 
 
+def test_ingest_financial_period_with_invalid_data_returns_422_and_persists_nothing(credit_client):
+    resp = credit_client.post("/api/companies", json={"nome": "Invalida S.A.", "setor": "Agro"})
+    company_id = resp.json()["id"]
+
+    resp = credit_client.post(
+        f"/api/companies/{company_id}/financial-periods",
+        json={
+            "period": "2025-Q1",
+            "period_type": "trimestral",
+            "statements": [{"statement_type": "BALANCO", "caixa": -50.0}],
+            "dispara_analise": False,
+        },
+    )
+    assert resp.status_code == 422
+    assert "caixa" in resp.json()["detail"][0]
+
+    resp = credit_client.get(f"/api/companies/{company_id}/financial-statements")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_read_financial_data_endpoints_for_unknown_company_return_404(credit_client):
+    resp = credit_client.get("/api/companies/999999/financial-statements")
+    assert resp.status_code == 404
+    resp = credit_client.get("/api/companies/999999/credit-metrics")
+    assert resp.status_code == 404
+    resp = credit_client.get("/api/companies/999999/financial-indicators")
+    assert resp.status_code == 404
+    resp = credit_client.get("/api/companies/999999/operational-data")
+    assert resp.status_code == 404
+    resp = credit_client.get("/api/companies/999999/debt-schedule")
+    assert resp.status_code == 404
+    resp = credit_client.get("/api/companies/999999/tracked-flags")
+    assert resp.status_code == 404
+
+
+def test_read_financial_data_endpoints_after_ingest(credit_client):
+    resp = credit_client.post("/api/companies", json={"nome": "Leitura S.A.", "setor": "Agro"})
+    company_id = resp.json()["id"]
+
+    resp = credit_client.post(
+        f"/api/companies/{company_id}/financial-periods",
+        json={
+            "period": "2025-Q1",
+            "period_type": "trimestral",
+            "statements": [{"statement_type": "DRE", "receita_liquida": 5000.0, "ebitda": 1000.0}],
+            "indicators": [{"metric_key": "divida_ebitda", "value": 2.5}],
+            "operational_data": [{"metric_key": "area_plantada_ha", "value": 300.0}],
+            "debt_maturities": [{"descricao": "Debenture 2027", "vencimento": "2027-06", "valor": 5000.0}],
+            "dispara_analise": False,
+        },
+    )
+    assert resp.status_code == 201
+
+    resp = credit_client.get(f"/api/companies/{company_id}/credit-metrics")
+    assert resp.status_code == 200
+    metrics = resp.json()
+    assert metrics[0]["period"] == "2025-Q1"
+    assert metrics[0]["margem_ebitda"] == 0.2
+
+    resp = credit_client.get(f"/api/companies/{company_id}/financial-statements")
+    assert resp.status_code == 200
+    assert resp.json()[0]["ebitda"] == 1000.0
+
+    resp = credit_client.get(f"/api/companies/{company_id}/financial-statements", params={"period": "2024-Q4"})
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+    resp = credit_client.get(f"/api/companies/{company_id}/financial-indicators")
+    assert resp.status_code == 200
+    assert resp.json()[0]["metric_key"] == "divida_ebitda"
+
+    resp = credit_client.get(f"/api/companies/{company_id}/operational-data")
+    assert resp.status_code == 200
+    assert resp.json()[0]["metric_key"] == "area_plantada_ha"
+
+    resp = credit_client.get(f"/api/companies/{company_id}/debt-schedule")
+    assert resp.status_code == 200
+    assert resp.json()[0]["descricao"] == "Debenture 2027"
+
+    resp = credit_client.get(f"/api/companies/{company_id}/tracked-flags")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
 def test_sector_knowledge_crud(credit_client):
     resp = credit_client.get("/api/sectors/SetorRotaInexistente/knowledge")
     assert resp.status_code == 404

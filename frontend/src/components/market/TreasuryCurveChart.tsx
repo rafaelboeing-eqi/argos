@@ -24,7 +24,7 @@ import {
   type TreasuryCurvePoint,
   type TreasuryCurveViewResponse,
 } from "@/types/market";
-import { EmptyState } from "./EmptyState";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 const WINDOW_COLORS: Record<CurveWindowLabel, string> = {
   today: "#00C796",
