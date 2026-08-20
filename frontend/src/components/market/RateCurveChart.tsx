@@ -13,7 +13,7 @@ import {
   type RateCurvePoint,
   type RateCurveViewResponse,
 } from "@/types/market";
-import { EmptyState } from "./EmptyState";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 const CURVE_ASSETS = [
   { key: "DI1", label: "DI" },

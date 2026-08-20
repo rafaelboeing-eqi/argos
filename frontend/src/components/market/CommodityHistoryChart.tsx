@@ -14,7 +14,7 @@ import {
   type CommodityHistoryApiResponse,
   type CommodityHistoryPeriod,
 } from "@/types/market";
-import { EmptyState } from "./EmptyState";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 const Y_DOMAIN_PADDING_RATIO = 0.04;
 

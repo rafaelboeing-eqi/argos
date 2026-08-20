@@ -12,6 +12,18 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from app.core.config import get_settings  # noqa: E402
 from app.models.base import Base  # noqa: E402
 from app.models import market_history, metric  # noqa: E402,F401 - registers tables on Base.metadata
+from app.models import (  # noqa: E402,F401 - registers credit tables on Base.metadata
+    company,
+    credit_analysis,
+    debt_maturity,
+    financial_indicator,
+    financial_statement,
+    operational_data,
+    sector_agent_run,
+    sector_framework,
+    sector_knowledge,
+    tracked_flag,
+)
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

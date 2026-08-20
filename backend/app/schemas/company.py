@@ -1,0 +1,140 @@
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel
+
+# Port 1:1 dos schemas de entrada de routes/companies.ts (Argos legado).
+
+
+class CompanyCreate(BaseModel):
+    nome: str
+    cnpj: str | None = None
+    ticker: str | None = None
+    setor: str
+    grupo_economico: str | None = None
+
+
+class Company(BaseModel):
+    id: int
+    nome: str
+    cnpj: str | None
+    ticker: str | None
+    setor: str
+    grupo_economico: str | None
+    created_at: datetime
+
+
+class FinancialStatementInput(BaseModel):
+    statement_type: Literal["DRE", "BALANCO", "FLUXO_CAIXA"]
+    receita_liquida: float | None = None
+    ebitda: float | None = None
+    lucro_liquido: float | None = None
+    divida_bruta: float | None = None
+    divida_liquida: float | None = None
+    caixa: float | None = None
+    raw_json: dict | None = None
+    fonte: str | None = None
+
+
+class FinancialIndicatorInput(BaseModel):
+    metric_key: str
+    value: float | None = None
+    unit: str | None = None
+    fonte: str | None = None
+
+
+class OperationalDataInput(BaseModel):
+    metric_key: str
+    value: float | None = None
+    unit: str | None = None
+    fonte: str | None = None
+
+
+class DebtMaturityInput(BaseModel):
+    descricao: str
+    vencimento: str | None = None
+    valor: float | None = None
+    covenant_descricao: str | None = None
+    covenant_status: Literal["compliant", "em_observacao", "violado"] | None = None
+    fonte: str | None = None
+
+
+class FinancialStatement(BaseModel):
+    id: int
+    company_id: int
+    period: str
+    period_type: str
+    statement_type: Literal["DRE", "BALANCO", "FLUXO_CAIXA"]
+    receita_liquida: float | None
+    ebitda: float | None
+    lucro_liquido: float | None
+    divida_bruta: float | None
+    divida_liquida: float | None
+    caixa: float | None
+    raw_json: dict | None
+    fonte: str | None
+    created_at: datetime
+
+
+class FinancialIndicator(BaseModel):
+    id: int
+    company_id: int
+    period: str
+    metric_key: str
+    value: float | None
+    unit: str | None
+    fonte: str | None
+    created_at: datetime
+
+
+class OperationalDataPoint(BaseModel):
+    id: int
+    company_id: int
+    period: str
+    metric_key: str
+    value: float | None
+    unit: str | None
+    fonte: str | None
+    created_at: datetime
+
+
+class DebtMaturity(BaseModel):
+    id: int
+    company_id: int
+    descricao: str
+    vencimento: str | None
+    valor: float | None
+    covenant_descricao: str | None
+    covenant_status: Literal["compliant", "em_observacao", "violado"] | None
+    fonte: str | None
+    created_at: datetime
+
+
+class TrackedFlag(BaseModel):
+    id: int
+    company_id: int
+    categoria: Literal["ponto_atencao", "red_flag"]
+    descricao: str
+    first_seen_analysis_id: int
+    last_seen_analysis_id: int
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class TriggerAnalysisRequest(BaseModel):
+    period: str | None = None
+
+
+class IngestPeriodRequest(BaseModel):
+    """Ingestao manual/mock de um novo periodo - o cenario-alvo desta fase,
+    ja que ainda nao ha integracao com uma fonte real (CVM, sistema interno
+    etc.)."""
+
+    period: str
+    period_type: Literal["trimestral", "anual"]
+    statements: list[FinancialStatementInput] = []
+    indicators: list[FinancialIndicatorInput] = []
+    operational_data: list[OperationalDataInput] = []
+    debt_maturities: list[DebtMaturityInput] = []
+    dispara_analise: bool = True
