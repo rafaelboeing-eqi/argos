@@ -69,7 +69,11 @@ export default function MercadoPage() {
         )}
       </section>
 
-      {!loading && <CommodityHistoryChart commodities={overview?.commodities ?? []} />}
+      {/* Not gated behind `loading`: its own fetch doesn't depend on `overview` (only
+          the small stats row above the chart does), so it should run in parallel
+          with the overview/rate-curve/treasury-curve requests, not wait for overview
+          to resolve first. */}
+      <CommodityHistoryChart commodities={overview?.commodities ?? []} />
     </div>
   );
 }

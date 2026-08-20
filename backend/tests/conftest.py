@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.database import engine as real_engine
 from app.core.database import get_db
 from app.main import app
-from app.models import market_history, metric  # noqa: F401 - registers tables on Base.metadata
+from app.models import collection_run, market_history, metric  # noqa: F401 - registers tables on Base.metadata
 from app.models import (  # noqa: F401 - registers credit tables on Base.metadata
     company,
     credit_analysis,

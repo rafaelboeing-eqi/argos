@@ -24,6 +24,7 @@ from app.models import (  # noqa: E402,F401 - registers credit tables on Base.me
     sector_knowledge,
     tracked_flag,
 )
+from app.models import collection_run  # noqa: E402,F401 - registers argos_collection_runs on Base.metadata
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

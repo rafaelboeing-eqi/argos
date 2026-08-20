@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     brapi_base_url: str = Field(default="https://brapi.dev")
     brapi_timeout_seconds: float = Field(default=15.0)
 
+    # Horario (HH:MM, hora local do processo) em que app/scripts/run_scheduler.py
+    # dispara run_daily_update() - ver app/services/market_data/daily_update.py.
+    daily_update_time: str = Field(default="03:00")
+
     @property
     def brapi_configured(self) -> bool:
         return bool(self.brapi_api_token)

@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
@@ -65,10 +66,10 @@ export function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="flex h-full w-60 shrink-0 flex-col bg-argos-950 text-white">
+    <aside className="sticky top-0 flex h-screen w-60 shrink-0 flex-col overflow-y-auto border-r border-argos-100 bg-white text-argos-800">
       <div className="px-5 pt-6 pb-5">
-        <Link href="/" className="text-lg font-semibold tracking-[0.15em]">
-          ARGOS
+        <Link href="/" aria-label="Argos">
+          <Image src="/argos-logo.png" alt="Argos" width={130} height={23} priority className="h-auto w-32.5" />
         </Link>
       </div>
 
@@ -80,7 +81,7 @@ export function Sidebar() {
               key={item.href}
               href={item.href}
               className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition ${
-                active ? "bg-argos-400 text-argos-950" : "text-argos-100/80 hover:bg-white/5 hover:text-white"
+                active ? "bg-argos-400 text-argos-950" : "text-argos-800 hover:bg-argos-50 hover:text-argos-950"
               }`}
             >
               {item.icon}
@@ -90,10 +91,10 @@ export function Sidebar() {
         })}
       </nav>
 
-      <div className="mt-auto flex flex-col gap-1 border-t border-white/10 px-5 py-4 text-xs text-argos-100/70">
+      <div className="mt-auto flex flex-col gap-1 border-t border-argos-100 px-5 py-4 text-xs text-zinc-500">
         <button
           type="button"
-          className="flex items-center justify-between text-left font-medium text-white/90 hover:text-white"
+          className="flex items-center justify-between text-left font-medium text-argos-900 hover:text-argos-950"
         >
           EQI Produtos
           <span aria-hidden>▾</span>

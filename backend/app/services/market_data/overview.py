@@ -6,7 +6,11 @@ argos_market_history (to know which contract is the "front" one per commodity).
 
 from sqlalchemy.orm import Session
 
-from app.repositories.market_repository import get_curve, get_data_freshness, get_latest_metrics
+from app.repositories.market_repository import (
+    get_data_freshness,
+    get_latest_curve_rows_for_assets,
+    get_latest_metric_per_key,
+)
 from app.services.market_data.config import (
     CATEGORY_FUTURES_CURVE,
     CATEGORY_MACRO,
@@ -26,18 +30,35 @@ _DI_VERTICES = [
 
 
 def build_overview(db: Session) -> dict:
-    indicators = [_macro_indicator_card(db, slug) for slug in MACRO_HIGHLIGHT_SERIES]
-    indicators += [_di_vertex_card(db, key, metric_name, label) for key, metric_name, label in _DI_VERTICES]
-    commodities = [_commodity_card(db, asset) for asset in COMMODITY_ASSETS]
+    """Assembles every top-of-page card in a fixed, small number of round trips
+    regardless of how many cards there are - one bulk read per (table, concern)
+    instead of one query per card. Used to be 2 (macro) + 3 IDENTICAL (DI
+    vertices) + 4*2 (commodities: get_curve + get_latest_metrics each) = 13
+    queries, several re-fetching hundreds of history rows just to keep the
+    latest one; now 4 total."""
+    macro_metrics = get_latest_metric_per_key(db, CATEGORY_MACRO, MACRO_HIGHLIGHT_SERIES)
+    di_metrics = get_latest_metric_per_key(db, CATEGORY_FUTURES_CURVE, ["DI1"])
+    commodity_curve_rows = get_latest_curve_rows_for_assets(db, COMMODITY_ASSETS, category=CATEGORY_FUTURES_CURVE)
+    commodity_metrics = get_latest_metric_per_key(db, CATEGORY_FUTURES_CURVE, COMMODITY_ASSETS)
+
+    indicators = [_macro_indicator_card(macro_metrics, slug) for slug in MACRO_HIGHLIGHT_SERIES]
+    indicators += [_di_vertex_card(di_metrics, key, metric_name, label) for key, metric_name, label in _DI_VERTICES]
+
+    curve_rows_by_asset: dict[str, list] = {}
+    for row in commodity_curve_rows:
+        curve_rows_by_asset.setdefault(row.asset, []).append(row)
+    commodities = [
+        _commodity_card(asset, curve_rows_by_asset.get(asset, []), commodity_metrics) for asset in COMMODITY_ASSETS
+    ]
+
     # Newest reference_date Argos actually has, independent of brapi being reachable
     # right now - this is what lets the Mercado page stay honest during an outage.
     data_as_of = get_data_freshness(db)
     return {"indicators": indicators, "commodities": commodities, "data_as_of": data_as_of}
 
 
-def _macro_indicator_card(db: Session, slug: str) -> dict:
-    rows = get_latest_metrics(db, category=CATEGORY_MACRO, asset=slug)
-    value_row = next((row for row in rows if row.metric == "value_current"), None)
+def _macro_indicator_card(macro_metrics: list, slug: str) -> dict:
+    value_row = next((row for row in macro_metrics if row.asset == slug and row.metric == "value_current"), None)
     return {
         "key": slug,
         "label": _MACRO_LABELS.get(slug, slug.upper()),
@@ -47,9 +68,8 @@ def _macro_indicator_card(db: Session, slug: str) -> dict:
     }
 
 
-def _di_vertex_card(db: Session, key: str, metric_name: str, label: str) -> dict:
-    rows = get_latest_metrics(db, category=CATEGORY_FUTURES_CURVE, asset="DI1")
-    row = next((r for r in rows if r.metric == metric_name and r.symbol is None), None)
+def _di_vertex_card(di_metrics: list, key: str, metric_name: str, label: str) -> dict:
+    row = next((r for r in di_metrics if r.metric == metric_name and r.symbol is None), None)
     return {
         "key": key,
         "label": label,
@@ -59,10 +79,9 @@ def _di_vertex_card(db: Session, key: str, metric_name: str, label: str) -> dict
     }
 
 
-def _commodity_card(db: Session, asset: str) -> dict:
+def _commodity_card(asset: str, curve_rows: list, commodity_metrics: list) -> dict:
     label = COMMODITY_LABELS.get(asset, asset)
-    curve = get_curve(db, asset)
-    if not curve:
+    if not curve_rows:
         return {
             "asset": asset,
             "label": label,
@@ -75,8 +94,8 @@ def _commodity_card(db: Session, asset: str) -> dict:
             "reference_date": None,
         }
 
-    front = select_front_contract(curve)
-    metric_rows = [row for row in get_latest_metrics(db, category=CATEGORY_FUTURES_CURVE, asset=asset) if row.symbol == front.symbol]
+    front = select_front_contract(curve_rows)
+    metric_rows = [row for row in commodity_metrics if row.asset == asset and row.symbol == front.symbol]
 
     def _find(metric_name: str) -> float | None:
         row = next((r for r in metric_rows if r.metric == metric_name), None)

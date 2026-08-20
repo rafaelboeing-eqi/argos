@@ -12,7 +12,7 @@ from datetime import date, timedelta
 
 from sqlalchemy.orm import Session
 
-from app.repositories.market_repository import get_curve, get_value_on_or_before
+from app.repositories.market_repository import get_curve, get_latest_values_before
 from app.services.market_data.config import CATEGORY_FUTURES_CURVE, CATEGORY_TREASURY
 
 COMPARISON_WINDOWS = (("today", 0), ("7d", 7), ("30d", 30), ("90d", 90))
@@ -62,17 +62,26 @@ def build_multi_date_curve(
     available snapshot on/before that window's target date - the exact date
     is never required. A symbol with no stored value at all for a given
     window is simply omitted from that window's list.
+
+    One bulk query per window (via get_latest_values_before) instead of one
+    query per (symbol, metric) pair - the latter was a sequential N+1 (e.g.
+    ~17 Tesouro bonds x 2 metrics x 4 windows = 136 round trips for a single
+    request) that dominated /mercado's load time.
     """
     today = date.today()
+    symbol_names = [symbol for symbol, _ in symbols]
     curves: dict[str, list[dict]] = {}
     for label, days_back in COMPARISON_WINDOWS:
         as_of = today - timedelta(days=days_back)
+        rows = get_latest_values_before(db, category, asset, symbol_names, metrics, as_of)
+        by_symbol_metric = {(row.symbol, row.metric): row for row in rows}
+
         points = []
         for symbol, expiration_date in symbols:
             values: dict[str, float] = {}
             reference_date = None
             for metric in metrics:
-                row = get_value_on_or_before(db, category, asset, symbol, metric, as_of)
+                row = by_symbol_metric.get((symbol, metric))
                 if row is not None:
                     values[metric] = float(row.value)
                     reference_date = row.reference_date

@@ -6,7 +6,7 @@ Nothing outside this module should build a query against these two tables.
 from datetime import date
 from typing import Any
 
-from sqlalchemy import and_, func, literal_column, or_, select
+from sqlalchemy import and_, func, literal_column, or_, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -250,6 +250,36 @@ def get_value_on_or_before(
     return db.execute(stmt).scalar_one_or_none()
 
 
+def get_latest_values_before(
+    db: Session, category: str, asset: str, symbols: list[str], metrics: list[str], as_of: date
+) -> list[ArgosMarketHistory]:
+    """Bulk version of get_value_on_or_before: one row per (symbol, metric) pair
+    found in `symbols`/`metrics` - whichever is most recent at or before `as_of` -
+    in a single round trip via DISTINCT ON, instead of one query per pair. Built
+    for build_multi_date_curve, which used to call get_value_on_or_before once per
+    (window, symbol, metric): for the Tesouro Direto curve (~17 bonds x 2 metrics x
+    4 windows) that was 136 sequential round trips per request."""
+    if not symbols or not metrics:
+        return []
+    stmt = (
+        select(ArgosMarketHistory)
+        .where(
+            ArgosMarketHistory.category == category,
+            ArgosMarketHistory.asset == asset,
+            ArgosMarketHistory.symbol.in_(symbols),
+            ArgosMarketHistory.metric.in_(metrics),
+            ArgosMarketHistory.reference_date <= as_of,
+        )
+        .order_by(
+            ArgosMarketHistory.symbol,
+            ArgosMarketHistory.metric,
+            ArgosMarketHistory.reference_date.desc(),
+        )
+        .distinct(ArgosMarketHistory.symbol, ArgosMarketHistory.metric)
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
 def bulk_upsert_metrics(db: Session, points: list[dict[str, Any] | None]) -> dict[str, int]:
     """Same atomic INSERT ... ON CONFLICT strategy as bulk_upsert_market_points,
     targeting uq_argos_metrics_series - (category, asset, symbol with NULL coalesced
@@ -335,4 +365,59 @@ def get_latest_metrics(
     if asset is not None:
         stmt = stmt.where(ArgosMetric.asset == asset)
     stmt = stmt.order_by(ArgosMetric.reference_date.desc())
+    return list(db.execute(stmt).scalars().all())
+
+
+def get_latest_metric_per_key(db: Session, category: str, assets: list[str]) -> list[ArgosMetric]:
+    """One row per (asset, symbol, metric) - the most recent by reference_date -
+    across every asset in `assets`, in a single round trip via DISTINCT ON.
+
+    Built for the /mercado overview cards: they only ever read the latest value
+    per metric, but get_latest_metrics() returns the FULL history ordered desc
+    (e.g. 230 rows for DI1 alone) and lets the caller pick off the first match -
+    wasteful, and it was being called once per card (3x identically for the DI
+    vertex cards) instead of once for the whole page.
+    """
+    if not assets:
+        return []
+    stmt = (
+        select(ArgosMetric)
+        .where(ArgosMetric.category == category, ArgosMetric.asset.in_(assets))
+        .order_by(
+            ArgosMetric.asset,
+            ArgosMetric.symbol,
+            ArgosMetric.metric,
+            ArgosMetric.reference_date.desc(),
+        )
+        .distinct(ArgosMetric.asset, ArgosMetric.symbol, ArgosMetric.metric)
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+def get_latest_curve_rows_for_assets(
+    db: Session, assets: list[str], category: str = CATEGORY_FUTURES_CURVE
+) -> list[ArgosMarketHistory]:
+    """Latest snapshot per asset (each asset's own most recent reference_date,
+    every symbol at that date) across every asset in `assets`, in two round
+    trips total instead of get_curve()'s two round trips PER asset - used by
+    the overview commodity cards, which called get_curve() once per commodity."""
+    if not assets:
+        return []
+    latest_stmt = (
+        select(ArgosMarketHistory.asset, func.max(ArgosMarketHistory.reference_date))
+        .where(ArgosMarketHistory.category == category, ArgosMarketHistory.asset.in_(assets))
+        .group_by(ArgosMarketHistory.asset)
+    )
+    latest_by_asset = dict(db.execute(latest_stmt).all())
+    if not latest_by_asset:
+        return []
+
+    stmt = (
+        select(ArgosMarketHistory)
+        .where(
+            ArgosMarketHistory.category == category,
+            tuple_(ArgosMarketHistory.asset, ArgosMarketHistory.reference_date).in_(list(latest_by_asset.items())),
+        )
+        .order_by(ArgosMarketHistory.expiration_date.asc())
+    )
     return list(db.execute(stmt).scalars().all())
